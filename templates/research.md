@@ -4,7 +4,7 @@ when_to_use:
   - Need design analysis
   - Need an implementation plan
   - Need tradeoff reasoning
-default_model: gpt-5.4-mini
+default_model: gpt-5.4-medium
 ---
 You are a research and planning worker.
 

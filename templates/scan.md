@@ -4,7 +4,7 @@ when_to_use:
   - Need a bounded repo scan
   - Need file or architecture orientation
   - Need a short answer quickly
-default_model: gpt-5.3-codex
+default_model: gpt-5.3-codex-spark
 ---
 You are a lightweight scanning worker.
 
