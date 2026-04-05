@@ -39,7 +39,7 @@ function latestSnapshot(ctx: ExtensionContext): PersistedRegistrySnapshot | null
 
 function buildAgentNotification(agent: AgentRecord): string {
 	const headline = `${agent.name} [${agent.state}] ${agent.model}`;
-	const detail = truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, 500) || "No summary available.";
+	const detail = (agent.latestFinalOutput ?? agent.latestSnippet) || "No summary available.";
 	return `${headline}\n${detail}`;
 }
 
@@ -247,13 +247,10 @@ export default function sysopExtension(pi: ExtensionAPI) {
 		updateUi(ctx);
 	});
 
-	pi.on("before_agent_start", async () => {
+	pi.on("before_agent_start", async (event) => {
+		const guidance = await buildGuidanceMessage();
 		return {
-			message: {
-				customType: "sysop-guidance",
-				content: await buildGuidanceMessage(),
-				display: false,
-			},
+			systemPrompt: `${event.systemPrompt}\n\n${guidance}`,
 		};
 	});
 

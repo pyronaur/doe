@@ -207,6 +207,7 @@ export class SysopRegistry extends EventEmitter {
 		this.updateAgentByThread(threadId, (agent) => ({
 			...agent,
 			latestSnippet: tailSnippet(text),
+			latestFinalOutput: text,
 		}));
 	}
 
