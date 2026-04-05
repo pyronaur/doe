@@ -42,7 +42,6 @@ export interface TurnSteerOptions {
 	threadId: string;
 	expectedTurnId: string;
 	prompt: string;
-	allowWrite?: boolean;
 }
 
 export type CodexClientEvent =
@@ -62,14 +61,9 @@ export function buildReadOnlySandbox(networkAccess = false) {
 	} as const;
 }
 
-export function buildWorkspaceWriteSandbox(cwd: string, networkAccess = false) {
+export function buildDangerFullAccessSandbox() {
 	return {
-		type: "workspaceWrite",
-		writableRoots: [cwd],
-		readOnlyAccess: { type: "fullAccess" },
-		networkAccess,
-		excludeTmpdirEnvVar: false,
-		excludeSlashTmp: false,
+		type: "dangerFullAccess",
 	} as const;
 }
 

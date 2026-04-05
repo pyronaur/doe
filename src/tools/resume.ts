@@ -99,11 +99,13 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			});
 
 			if (agent.activeTurnId && agent.state === "working") {
+				if (params.allowWrite !== undefined && params.allowWrite !== (agent.allowWrite ?? false)) {
+					throw new Error("Cannot change read/write permission while a turn is already running. Wait for the active turn to finish, then resume with allowWrite set for the next turn.");
+				}
 				await deps.client.steerTurn({
 					threadId: agent.threadId,
 					expectedTurnId: agent.activeTurnId,
 					prompt,
-					allowWrite,
 				});
 			} else {
 				await deps.client.resumeThread({

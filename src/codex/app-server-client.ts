@@ -2,8 +2,8 @@ import { EventEmitter } from "node:events";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import {
+	buildDangerFullAccessSandbox,
 	buildReadOnlySandbox,
-	buildWorkspaceWriteSandbox,
 	type CodexClientEvent,
 	type ThreadStartOptions,
 	type ThreadSummary,
@@ -84,7 +84,7 @@ export class CodexAppServerClient extends EventEmitter {
 			model: options.model,
 			cwd: options.cwd,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandbox: allowWrite ? "workspace-write" : "read-only",
+			sandbox: allowWrite ? "danger-full-access" : "read-only",
 			serviceName: options.serviceName ?? this.options.serviceName ?? "pi_sysop",
 			baseInstructions: options.baseInstructions ?? null,
 			developerInstructions: options.developerInstructions ?? null,
@@ -106,7 +106,7 @@ export class CodexAppServerClient extends EventEmitter {
 			model: options.model ?? null,
 			cwd: options.cwd ?? null,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandbox: allowWrite ? "workspace-write" : "read-only",
+			sandbox: allowWrite ? "danger-full-access" : "read-only",
 			persistExtendedHistory: true,
 		});
 		this.threadWriteAccess.set(options.threadId, allowWrite);
@@ -140,7 +140,7 @@ export class CodexAppServerClient extends EventEmitter {
 			cwd: options.cwd,
 			approvalPolicy: options.approvalPolicy ?? "never",
 			sandboxPolicy: allowWrite
-				? buildWorkspaceWriteSandbox(options.cwd, options.networkAccess ?? false)
+				? buildDangerFullAccessSandbox()
 				: buildReadOnlySandbox(options.networkAccess ?? false),
 			model: options.model,
 			effort: options.effort ?? "medium",
@@ -150,9 +150,6 @@ export class CodexAppServerClient extends EventEmitter {
 
 	async steerTurn(options: TurnSteerOptions): Promise<any> {
 		await this.ensureStarted();
-		if (options.allowWrite !== undefined) {
-			this.threadWriteAccess.set(options.threadId, options.allowWrite);
-		}
 		return this.request("turn/steer", {
 			threadId: options.threadId,
 			input: [{ type: "text", text: options.prompt }],
@@ -270,7 +267,10 @@ export class CodexAppServerClient extends EventEmitter {
 		switch (method) {
 			case "thread/started":
 				if (params.thread?.id && !this.threadWriteAccess.has(params.thread.id)) {
-					this.threadWriteAccess.set(params.thread.id, params.thread?.sandbox?.type === "workspaceWrite");
+					this.threadWriteAccess.set(
+						params.thread.id,
+						params.thread?.sandbox?.type === "workspaceWrite" || params.thread?.sandbox?.type === "dangerFullAccess",
+					);
 				}
 				this.emit("event", { type: "thread-started", thread: params.thread } satisfies CodexClientEvent);
 				return;
