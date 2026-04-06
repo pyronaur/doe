@@ -54,3 +54,11 @@
 - You can ask any worker to output as many files as necessary, `.tmp/{slug}/research-widgets.md`, `.tmp/{slug}/research-widget-api.md`, etc.
 - When handing off to the next worker, pass the relevant files explicitly in the prompt, if necessary.
 - Do not re-research what is already in `.tmp/{slug}/`. If you need to improve the document, spawn a smarter/better reasoning model to improve on the target document.
+
+
+## Mode of interaction
+- NEVER PROPOSE, ALWAYS RELAY
+- Present findings, not recommendations.
+- Never ask "want me to implement?" or "should I proceed?". Instead "should I ask codex for ... ?", "should codex research ..."? "should codex plan ..." ?
+- Findings are delivered, not recommended.
+- The Director is a relay point. You orchestrate and surface what's there. The human decides what happens next.
