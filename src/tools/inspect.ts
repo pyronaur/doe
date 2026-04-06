@@ -3,11 +3,31 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { extractTurnMessages, truncateForDisplay } from "../codex/client.js";
+import { extractThreadMessages, extractTurnMessages, truncateForDisplay } from "../codex/client.js";
 import type { SysopRegistry } from "../state/registry.js";
 
-const HistorySchema = StringEnum(["summary", "first_last", "full"] as const);
+const HistorySchema = StringEnum(["summary", "first_last", "transcript", "full", "raw"] as const);
+const MESSAGE_BLOCK_MAX_CHARS = 4_000;
 const ACTIVE_INSPECT_COOLDOWN_MS = 15_000;
+
+function formatMessageBlock(text: string | null | undefined, maxChars = MESSAGE_BLOCK_MAX_CHARS): string {
+	if (!text) return "(none)";
+	const normalized = text.replace(/\r\n?/g, "\n").trim();
+	if (!normalized) return "(none)";
+	if (normalized.length <= maxChars) return normalized;
+	return `${normalized.slice(0, maxChars - 1)}…`;
+}
+
+function renderTranscript(thread: any): string {
+	const messages = extractThreadMessages(thread);
+	if (messages.length === 0) return "(no user/agent messages found)";
+	return messages
+		.map((message, index) => {
+			const label = message.role === "user" ? `User ${index + 1}` : `Agent ${index + 1}`;
+			return `## ${label}\n${formatMessageBlock(message.text)}`;
+		})
+		.join("\n\n");
+}
 
 export function registerInspectTool(
 	pi: ExtensionAPI,
@@ -18,11 +38,13 @@ export function registerInspectTool(
 	pi.registerTool({
 		name: "codex_inspect",
 		label: "Codex Inspect",
-		description: "Inspect a Codex workstream, including the latest snippet and stored thread history.",
-		promptSnippet: "Inspect a worker when you need its latest snippet, state, or first/last messages.",
+		description: "Inspect a Codex workstream, including readable prompts, outputs, and thread history.",
+		promptSnippet: "Inspect a worker when you need its exact prompt, latest output, or a readable transcript.",
 		promptGuidelines: [
 			"Use this for one-off lookups, explicit user requests, or thread-selection clarity.",
-			"Do not use this tool as a polling loop for active async workers; wait for completion notifications instead.",
+			"Prefer history=first_last or history=transcript for readable prompts and outputs.",
+			"Use history=raw only for debugging metadata; raw thread objects stay in tool details, not the conversational output.",
+			"Do not use this tool as a polling loop for active workers.",
 		],
 		parameters: Type.Object({
 			agentId: Type.Optional(Type.String()),
@@ -48,7 +70,7 @@ export function registerInspectTool(
 			if ((agent.state === "working" || agent.state === "awaiting_input") && !params.force) {
 				const lastInspectAt = recentActiveInspects.get(agent.id) ?? 0;
 				if (Date.now() - lastInspectAt < ACTIVE_INSPECT_COOLDOWN_MS) {
-					throw new Error("Do not poll active workers with codex_inspect. Wait for the completion steer, or retry later with force=true if the user explicitly asked for a live check.");
+					throw new Error("Do not poll active workers with codex_inspect. Wait for the worker to finish, or retry later with force=true if the user explicitly asked for a live check.");
 				}
 				recentActiveInspects.set(agent.id, Date.now());
 			}
@@ -69,6 +91,7 @@ export function registerInspectTool(
 			const threadResponse = await deps.client.readThread(agent.threadId, true);
 			const thread = threadResponse.thread;
 			const { firstUserMessage, lastAgentMessage } = extractTurnMessages(thread);
+			const transcript = renderTranscript(thread);
 			const lines = [
 				`id: ${agent.id}`,
 				`thread: ${agent.threadId}`,
@@ -78,12 +101,24 @@ export function registerInspectTool(
 				`mode: ${agent.allowWrite ? "write" : "read-only"}`,
 				`cwd: ${agent.cwd}`,
 				`latest: ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, 300)}`,
-				`first_user: ${truncateForDisplay(firstUserMessage, 300)}`,
-				`last_agent: ${truncateForDisplay(lastAgentMessage, 300)}`,
+				`turns: ${(thread.turns ?? []).length}`,
+				`messages: ${extractThreadMessages(thread).length}`,
 			];
 
-			if (history === "full") {
-				lines.push("", JSON.stringify(thread, null, 2));
+			if (history === "first_last") {
+				lines.push(
+					"",
+					"first_user:",
+					formatMessageBlock(firstUserMessage),
+					"",
+					"last_agent:",
+					formatMessageBlock(lastAgentMessage),
+				);
+			} else {
+				lines.push("", "transcript:", transcript);
+				if (history === "raw") {
+					lines.push("", "[raw thread metadata kept in tool details only]");
+				}
 			}
 
 			return {

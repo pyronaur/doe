@@ -41,7 +41,7 @@ export function registerListTool(pi: ExtensionAPI, deps: { registry: SysopRegist
 			if (batches.length > 0) {
 				lines.push("", "Batches:");
 				for (const batch of batches) {
-					lines.push(`- ${batch.id} :: ${batch.name} agents=${batch.agentIds.length} mode=${batch.notificationMode}/${batch.returnMode}`);
+					lines.push(`- ${batch.id} :: ${batch.name} agents=${batch.agentIds.length} state=${batch.completedAt ? "completed" : "working"}`);
 				}
 			}
 			return {

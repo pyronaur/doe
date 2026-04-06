@@ -1,11 +1,9 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
 import { CodexAppServerClient } from "./src/codex/app-server-client.js";
 import type { CodexClientEvent } from "./src/codex/client.js";
-import { truncateForDisplay } from "./src/codex/client.js";
-import { SysopRegistry, type AgentRecord, type BatchRecord, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
+import { SysopRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
 import { AgentSidebarController } from "./src/ui/agent-sidebar.js";
 import { loadMarkdownDoc, loadMarkdownDocs, summarizeTemplates } from "./src/templates/loader.js";
 import { registerSpawnTool } from "./src/tools/spawn.js";
@@ -13,9 +11,8 @@ import { registerResumeTool } from "./src/tools/resume.js";
 import { registerListTool } from "./src/tools/list.js";
 import { registerInspectTool } from "./src/tools/inspect.js";
 import { registerCancelTool } from "./src/tools/cancel.js";
-import { registerDocsTool } from "./src/tools/docs.js";
 
-const TOOL_NAMES = ["read", "docs", "codex_spawn", "codex_delegate", "codex_resume", "codex_list", "codex_inspect", "codex_cancel"];
+const TOOL_NAMES = ["codex_spawn", "codex_delegate", "codex_resume", "codex_list", "codex_inspect", "codex_cancel"];
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = join(__dirname, "prompts");
 const TEMPLATES_DIR = join(__dirname, "templates");
@@ -23,7 +20,7 @@ const TEMPLATES_DIR = join(__dirname, "templates");
 function formatActiveSummary(registry: SysopRegistry): string[] {
 	const agents = registry.listAgents({ includeCompleted: false, limit: 3 });
 	if (agents.length === 0) return [];
-	return agents.map((agent) => `• ${agent.name} [${agent.state}] ${truncateForDisplay(agent.latestSnippet, 42)}`);
+	return agents.map((agent) => `• ${agent.name}: ${agent.activityLabel ?? agent.state}`);
 }
 
 function latestSnapshot(ctx: ExtensionContext): PersistedRegistrySnapshot | null {
@@ -35,20 +32,6 @@ function latestSnapshot(ctx: ExtensionContext): PersistedRegistrySnapshot | null
 		}
 	}
 	return null;
-}
-
-function buildAgentNotification(agent: AgentRecord): string {
-	const headline = `${agent.name} [${agent.state}] ${agent.model}`;
-	const detail = (agent.latestFinalOutput ?? agent.latestSnippet) || "No summary available.";
-	return `${headline}\n${detail}`;
-}
-
-function buildBatchNotification(batch: BatchRecord, agents: AgentRecord[]): string {
-	const lines = [`Batch complete: ${batch.name}`];
-	for (const agent of agents) {
-		lines.push(`- ${agent.name} [${agent.state}] ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, 160)}`);
-	}
-	return lines.join("\n");
 }
 
 export default function sysopExtension(pi: ExtensionAPI) {
@@ -128,39 +111,8 @@ export default function sysopExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		if (event.type === "agent-terminal") {
+		if (event.type === "agent-terminal" || event.type === "batch-completed") {
 			flushPersist();
-			const agent = event.agent;
-			if (agent.returnMode === "async" && agent.notificationMode === "notify_each" && !agent.completionNotified) {
-				pi.sendMessage(
-					{
-						customType: "sysop-notification",
-						content: buildAgentNotification(agent),
-						details: { kind: "agent", agent },
-						display: true,
-					},
-					{ triggerTurn: true, deliverAs: "steer" },
-				);
-				registry.markCompletionNotified(agent.id);
-			}
-			return;
-		}
-
-		if (event.type === "batch-completed") {
-			flushPersist();
-			const batch = event.batch;
-			if (batch.returnMode === "async" && batch.notificationMode === "wait_all" && !batch.notified) {
-				pi.sendMessage(
-					{
-						customType: "sysop-notification",
-						content: buildBatchNotification(batch, event.agents),
-						details: { kind: "batch", batch, agents: event.agents },
-						display: true,
-					},
-					{ triggerTurn: true, deliverAs: "steer" },
-				);
-				registry.markBatchNotified(batch.id);
-			}
 		}
 	}
 
@@ -174,6 +126,9 @@ export default function sysopExtension(pi: ExtensionAPI) {
 				break;
 			case "agent-message-delta":
 				registry.appendAgentDelta(event.threadId, event.delta);
+				break;
+			case "agent-activity":
+				registry.markActivity(event.threadId, event.activity);
 				break;
 			case "agent-message-complete":
 				registry.setAgentSnippet(event.threadId, event.text);
@@ -201,18 +156,11 @@ export default function sysopExtension(pi: ExtensionAPI) {
 	registry.on("event", handleRegistryEvent);
 	client.on("event", handleCodexEvent);
 
-	pi.registerMessageRenderer("sysop-notification", (message, _options, theme) => {
-		const details = (message as any).details ?? {};
-		const prefix = details.kind === "batch" ? "batch" : "agent";
-		return new Text(theme.fg("accent", `[sysop/${prefix}] `) + String(message.content ?? ""), 0, 0);
-	});
-
 	registerSpawnTool(pi, { client, registry, templatesDir: TEMPLATES_DIR });
 	registerResumeTool(pi, { client, registry, templatesDir: TEMPLATES_DIR });
 	registerListTool(pi, { registry });
 	registerInspectTool(pi, { client, registry });
 	registerCancelTool(pi, { client, registry });
-	registerDocsTool(pi);
 
 	pi.registerCommand("sysop-sidebar", {
 		description: "Toggle the persistent sysop sidebar",

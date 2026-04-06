@@ -4,12 +4,10 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
-import type { NotificationMode, ReturnMode, SysopRegistry } from "../state/registry.js";
+import type { NotificationMode, SysopRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
-const NotifySchema = StringEnum(["wait_all", "notify_each"] as const);
-const ReturnModeSchema = StringEnum(["wait", "async"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
 
 interface ResumeToolDeps {
@@ -42,6 +40,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 		promptGuidelines: [
 			"Use this when continuing related work on an existing thread.",
 			"If the request is unrelated, prefer codex_spawn for a fresh thread.",
+			"This tool waits for the resumed worker to finish before returning.",
 			"Keep the thread read-only unless this is explicit implementation work.",
 		],
 		parameters: Type.Object({
@@ -55,8 +54,6 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			approvalPolicy: Type.Optional(ApprovalSchema),
 			networkAccess: Type.Optional(Type.Boolean()),
 			allowWrite: Type.Optional(Type.Boolean()),
-			notificationMode: Type.Optional(NotifySchema),
-			returnMode: Type.Optional(ReturnModeSchema),
 		}),
 		renderCall(args, theme) {
 			return new Text(theme.fg("accent", `codex_resume ${(args as any).agentId ?? (args as any).threadId ?? "thread"}`), 0, 0);
@@ -74,8 +71,8 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				throw new Error("Unknown agent/thread. Provide an existing agentId or threadId from codex_list/codex_inspect.");
 			}
 
-			const notificationMode = (params.notificationMode ?? agent.notificationMode ?? "notify_each") as NotificationMode;
-			const returnMode = (params.returnMode ?? (notificationMode === "wait_all" ? "wait" : "async")) as ReturnMode;
+			const notificationMode = (agent.notificationMode ?? "notify_each") as NotificationMode;
+			const returnMode = "wait" as const;
 			const effort = (params.effort ?? agent.effort ?? "medium") as ReasoningEffort;
 			const model = params.model ?? agent.model;
 			const approvalPolicy = (params.approvalPolicy ?? "never") as ApprovalPolicy;
@@ -89,6 +86,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				effort,
 				template: templateName ?? agent.template,
 				state: "working",
+				activityLabel: "starting",
 				allowWrite,
 				latestSnippet: `resume: ${truncateForDisplay(prompt, 120)}`,
 				latestFinalOutput: null,
@@ -129,17 +127,10 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				deps.registry.markTurnStarted(agent.threadId, turn.turn.id);
 			}
 
-			if (returnMode === "wait") {
-				const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
-				return {
-					content: [{ type: "text", text: truncateForDisplay(finalAgent.latestFinalOutput ?? finalAgent.latestSnippet, 400) || "Completed" }],
-					details: { agent: finalAgent },
-				};
-			}
-
+			const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
 			return {
-				content: [{ type: "text", text: `Resumed ${agent.name} (${agent.id}).` }],
-				details: { agent: deps.registry.getAgent(agent.id) },
+				content: [{ type: "text", text: truncateForDisplay(finalAgent.latestFinalOutput ?? finalAgent.latestSnippet, 400) || "Completed" }],
+				details: { agent: finalAgent },
 			};
 		},
 	});

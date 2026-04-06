@@ -104,7 +104,9 @@ class SidebarComponent {
 								? "warning"
 								: "accent";
 				const heading = `${agent.name} · ${agent.model}`;
-				const meta = `${agent.state} · ${formatElapsed(agent.startedAt, agent.completedAt)}`;
+				const meta = agent.state === "working"
+					? `${agent.activityLabel ?? agent.state} · ${formatElapsed(agent.startedAt, agent.completedAt)}`
+					: `${agent.state} · ${formatElapsed(agent.startedAt, agent.completedAt)}`;
 				const snippet = agent.latestFinalOutput || agent.latestSnippet || "(waiting for message output)";
 				const snippetLines = wrapPlainText(snippet, messageWidth, 8);
 				lines.push(borderLeft + th.fg("accent", pad(` ${heading}`, inner)) + th.fg("border", "│"));

@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
+import type { AgentActivity } from "../codex/client.js";
 
 export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_input";
 export type NotificationMode = "wait_all" | "notify_each";
-export type ReturnMode = "wait" | "async";
+export type ReturnMode = "wait";
 
 export interface AgentRecord {
 	id: string;
@@ -15,6 +16,7 @@ export interface AgentRecord {
 	threadId?: string | null;
 	activeTurnId?: string | null;
 	state: AgentLifecycleState;
+	activityLabel?: AgentActivity | null;
 	latestSnippet: string;
 	latestFinalOutput?: string | null;
 	lastError?: string | null;
@@ -52,6 +54,19 @@ export type RegistryEvent =
 	| { type: "batch-completed"; batch: BatchRecord; agents: AgentRecord[] };
 
 const TERMINAL_STATES = new Set<AgentLifecycleState>(["completed", "error", "awaiting_input"]);
+
+function normalizeErrorText(text: string): string {
+	const trimmed = text.trim();
+	if (!trimmed) return text;
+	try {
+		const parsed = JSON.parse(trimmed);
+		const message = parsed?.error?.message;
+		if (typeof message === "string" && message.trim()) {
+			return message.trim();
+		}
+	} catch {}
+	return text;
+}
 
 function tailSnippet(text: string, maxChars = 1800, maxLines = 12): string {
 	const normalized = text.replace(/\r\n?/g, "\n").replace(/\t/g, "  ");
@@ -178,12 +193,16 @@ export class SysopRegistry extends EventEmitter {
 		if (!status) return;
 		this.updateAgentByThread(threadId, (agent) => {
 			let state = agent.state;
+			let activityLabel = agent.activityLabel ?? null;
 			if (status.type === "active") {
-				state = (status.activeFlags ?? []).includes("waitingOnApproval") ? "awaiting_input" : "working";
+				const waiting = (status.activeFlags ?? []).includes("waitingOnApproval");
+				state = waiting ? "awaiting_input" : "working";
+				activityLabel = waiting ? "awaiting approval" : activityLabel;
 			} else if (status.type === "systemError") {
 				state = "error";
+				activityLabel = "error";
 			}
-			return { ...agent, state };
+			return { ...agent, state, activityLabel };
 		});
 	}
 
@@ -192,7 +211,16 @@ export class SysopRegistry extends EventEmitter {
 			...agent,
 			activeTurnId: turnId,
 			state: "working",
+			activityLabel: "thinking",
 			completedAt: null,
+		}));
+	}
+
+	markActivity(threadId: string, activityLabel: AgentActivity) {
+		this.updateAgentByThread(threadId, (agent) => ({
+			...agent,
+			state: activityLabel === "awaiting input" || activityLabel === "awaiting approval" ? "awaiting_input" : agent.state,
+			activityLabel,
 		}));
 	}
 
@@ -215,6 +243,7 @@ export class SysopRegistry extends EventEmitter {
 		this.updateAgentByThread(threadId, (agent) => ({
 			...agent,
 			state: "completed",
+			activityLabel: "completed",
 			completedAt: Date.now(),
 			activeTurnId: null,
 			latestFinalOutput: finalOutput ?? agent.latestFinalOutput ?? agent.latestSnippet,
@@ -226,6 +255,7 @@ export class SysopRegistry extends EventEmitter {
 		this.updateAgentByThread(threadId, (agent) => ({
 			...agent,
 			state: "awaiting_input",
+			activityLabel: "awaiting input",
 			completedAt: Date.now(),
 			activeTurnId: null,
 			latestSnippet: note ? tailSnippet(note) : agent.latestSnippet,
@@ -233,13 +263,15 @@ export class SysopRegistry extends EventEmitter {
 	}
 
 	markError(threadId: string, error: string) {
+		const normalizedError = normalizeErrorText(error);
 		this.updateAgentByThread(threadId, (agent) => ({
 			...agent,
 			state: "error",
+			activityLabel: "error",
 			completedAt: Date.now(),
 			activeTurnId: null,
-			lastError: error,
-			latestSnippet: tailSnippet(error),
+			lastError: normalizedError,
+			latestSnippet: tailSnippet(normalizedError),
 		}));
 	}
 
@@ -330,10 +362,23 @@ export class SysopRegistry extends EventEmitter {
 			return;
 		}
 		for (const agent of snapshot.agents ?? []) {
-			this.agents.set(agent.id, { ...agent, recovered: true });
+			this.agents.set(agent.id, {
+				...agent,
+				returnMode: "wait",
+				activityLabel:
+					agent.activityLabel ??
+					(agent.state === "completed"
+						? "completed"
+						: agent.state === "error"
+							? "error"
+							: agent.state === "awaiting_input"
+								? "awaiting input"
+								: "thinking"),
+				recovered: true,
+			});
 		}
 		for (const batch of snapshot.batches ?? []) {
-			this.batches.set(batch.id, { ...batch, agentIds: [...batch.agentIds] });
+			this.batches.set(batch.id, { ...batch, returnMode: "wait", agentIds: [...batch.agentIds] });
 		}
 		this.emitChange();
 	}

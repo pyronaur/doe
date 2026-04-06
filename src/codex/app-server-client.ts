@@ -4,6 +4,7 @@ import readline from "node:readline";
 import {
 	buildDangerFullAccessSandbox,
 	buildReadOnlySandbox,
+	type AgentActivity,
 	type CodexClientEvent,
 	type ThreadStartOptions,
 	type ThreadSummary,
@@ -14,6 +15,28 @@ import {
 interface PendingRequest {
 	resolve: (value: any) => void;
 	reject: (error: Error) => void;
+}
+
+function activityFromItem(item: any, event: "started" | "completed"): AgentActivity | null {
+	switch (item?.type) {
+		case "reasoning":
+			return "thinking";
+		case "plan":
+			return event === "started" ? "planning" : "thinking";
+		case "commandExecution":
+		case "dynamicToolCall":
+		case "mcpToolCall":
+		case "collabAgentToolCall":
+		case "webSearch":
+		case "imageView":
+			return event === "started" ? "using tools" : "thinking";
+		case "fileChange":
+			return event === "started" ? "editing files" : "thinking";
+		case "agentMessage":
+			return event === "started" ? "writing response" : "thinking";
+		default:
+			return null;
+	}
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -144,7 +167,6 @@ export class CodexAppServerClient extends EventEmitter {
 				: buildReadOnlySandbox(options.networkAccess ?? false),
 			model: options.model,
 			effort: options.effort ?? "medium",
-			summary: "concise",
 		});
 	}
 
@@ -288,6 +310,17 @@ export class CodexAppServerClient extends EventEmitter {
 					turnId: params.turn?.id,
 				} satisfies CodexClientEvent);
 				return;
+			case "item/started": {
+				const activity = activityFromItem(params.item, "started");
+				if (activity) {
+					this.emit("event", {
+						type: "agent-activity",
+						threadId: params.threadId,
+						activity,
+					} satisfies CodexClientEvent);
+				}
+				return;
+			}
 			case "turn/completed":
 				this.emit("event", {
 					type: "turn-completed",
@@ -306,7 +339,15 @@ export class CodexAppServerClient extends EventEmitter {
 					delta: params.delta ?? "",
 				} satisfies CodexClientEvent);
 				return;
-			case "item/completed":
+			case "item/completed": {
+				const activity = activityFromItem(params.item, "completed");
+				if (activity) {
+					this.emit("event", {
+						type: "agent-activity",
+						threadId: params.threadId,
+						activity,
+					} satisfies CodexClientEvent);
+				}
 				if (params.item?.type === "agentMessage") {
 					this.emit("event", {
 						type: "agent-message-complete",
@@ -317,6 +358,7 @@ export class CodexAppServerClient extends EventEmitter {
 					} satisfies CodexClientEvent);
 				}
 				return;
+			}
 			case "error":
 				this.emit("event", {
 					type: "error",

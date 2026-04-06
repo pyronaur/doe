@@ -5,12 +5,10 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
-import type { NotificationMode, ReturnMode, SysopRegistry } from "../state/registry.js";
+import type { NotificationMode, SysopRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
-const NotifySchema = StringEnum(["wait_all", "notify_each"] as const);
-const ReturnModeSchema = StringEnum(["wait", "async"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
 
 const TaskSchema = Type.Object({
@@ -38,8 +36,6 @@ const SpawnParametersSchema = Type.Object({
 	approvalPolicy: Type.Optional(ApprovalSchema),
 	networkAccess: Type.Optional(Type.Boolean()),
 	allowWrite: Type.Optional(Type.Boolean()),
-	notificationMode: Type.Optional(NotifySchema),
-	returnMode: Type.Optional(ReturnModeSchema),
 	batchName: Type.Optional(Type.String()),
 });
 
@@ -109,11 +105,8 @@ function normalizeMultiTaskArgs(args: unknown) {
 	if (!args || typeof args !== "object") return args;
 	const input = args as any;
 	if (!Array.isArray(input.tasks) || input.tasks.length === 0) return args;
-	const firstTask = input.tasks[0] ?? {};
 	return {
 		...input,
-		returnMode: input.returnMode ?? firstTask.returnMode,
-		notificationMode: input.notificationMode ?? firstTask.notificationMode,
 		tasks: input.tasks.map((task: any) => {
 			const { returnMode: _taskReturnMode, notificationMode: _taskNotifyMode, ...rest } = task ?? {};
 			return rest;
@@ -139,9 +132,9 @@ async function executeSpawnLike(
 	deps: SpawnToolDeps,
 ) {
 	const tasks = buildTasks(params);
-	const notificationMode = (params.notificationMode ?? "notify_each") as NotificationMode;
-	const returnMode = (params.returnMode ?? (notificationMode === "wait_all" ? "wait" : "async")) as ReturnMode;
 	const batchId = tasks.length > 1 ? randomUUID() : null;
+	const notificationMode = (batchId ? "wait_all" : "notify_each") as NotificationMode;
+	const returnMode = "wait" as const;
 	const batchName =
 		params.batchName ?? (tasks.length > 1 ? `${tasks.length} delegated tasks` : tasks[0]?.name ?? "delegated task");
 	const seededAgentIds = tasks.map(() => randomUUID());
@@ -181,6 +174,7 @@ async function executeSpawnLike(
 			threadId: null,
 			activeTurnId: null,
 			state: "working",
+			activityLabel: "starting",
 			latestSnippet: `queued: ${truncateForDisplay(prompt, 120)}`,
 			latestFinalOutput: null,
 			lastError: null,
@@ -222,37 +216,20 @@ async function executeSpawnLike(
 		createdAgents.push(deps.registry.getAgent(agentId));
 	}
 
-	if (returnMode === "wait") {
-		const finalAgents = batchId
-			? await deps.registry.waitForBatch(batchId, signal)
-			: [await deps.registry.waitForAgent(agentIds[0]!, signal)];
-		return {
-			content: [
-				{
-					type: "text",
-					text: [`All delegated work completed for ${batchName}.`, summarizeAgents(finalAgents, 96) || "Completed", "Answer the user now using these results."].join("\n"),
-				},
-			],
-			details: {
-				batchId,
-				batchName,
-				agents: finalAgents,
-			},
-		};
-	}
-
-	const completionMode = notificationMode === "wait_all" ? "one completion steer when the batch finishes" : "a completion steer for each worker";
+	const finalAgents = batchId
+		? await deps.registry.waitForBatch(batchId, signal)
+		: [await deps.registry.waitForAgent(agentIds[0]!, signal)];
 	return {
 		content: [
 			{
 				type: "text",
-				text: `Spawned ${agentIds.length} Codex ${agentIds.length === 1 ? "agent" : "agents"} in ${batchId ? `batch ${batchName}` : "single mode"}. Wait for ${completionMode}; do not poll with codex_inspect unless the user explicitly asks for a live check.`,
+				text: [`All delegated work completed for ${batchName}.`, summarizeAgents(finalAgents, 96) || "Completed", "Answer the user now using these results."].join("\n"),
 			},
 		],
 		details: {
 			batchId,
 			batchName,
-			agents: createdAgents,
+			agents: finalAgents,
 		},
 	};
 }
@@ -266,17 +243,15 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 		promptGuidelines: [
 			"Use this tool instead of researching or coding directly.",
 			"Pass multiple tasks in tasks[] when you want parallel workers.",
-			"Set notificationMode=wait_all for batches that should report together.",
-			"For async work, return after launch and wait for the completion steer instead of polling with codex_inspect.",
+			"This tool waits for worker completion and returns the results in the same turn.",
 			"Workers are read-only by default. Only set allowWrite=true or use template=implement for explicit implementation work.",
 		],
 		parameters: SpawnParametersSchema,
 		prepareArguments: normalizeMultiTaskArgs,
 		renderCall(args, theme) {
 			const taskCount = Array.isArray((args as any).tasks) ? (args as any).tasks.length : 1;
-			const mode = (args as any).notificationMode ?? "notify_each";
 			const label = taskCount > 1 ? `${taskCount} agents` : "1 agent";
-			return new Text(theme.fg("accent", `codex_spawn ${label}`) + theme.fg("dim", ` (${mode})`), 0, 0);
+			return new Text(theme.fg("accent", `codex_spawn ${label}`), 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			const details = (result as any).details ?? {};
@@ -297,7 +272,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 		promptSnippet: "Alias of codex_spawn for delegation-oriented language.",
 		promptGuidelines: [
 			"Use this for new delegated research, planning, or implementation tasks.",
-			"Do not use codex_inspect as a polling loop after an async delegate; wait for completion steers.",
+			"This tool waits for completion and returns the worker results in the same turn.",
 		],
 		parameters: SpawnParametersSchema,
 		prepareArguments: normalizeMultiTaskArgs,

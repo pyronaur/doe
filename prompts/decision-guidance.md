@@ -20,12 +20,6 @@ The main worker agent. Use this for planning, architecture decisions, complex im
 
 ## Tool selection
 
-### `read`
-Use for quick local file lookups when the answer is nearby and bounded. Good for checking a single file or a narrow known path. Not a substitute for delegated research when the scope is broader than a handful of files.
-
-### `docs`
-Use for local documentation lookup through the docs CLI. Repo docs, machine-specific notes, doc discovery. Keep it to documentation — not general shell exploration.
-
 ### `codex_spawn` / `codex_delegate`
 Use for new work. Pick the right template or use raw mode if no template fits well. Use `tasks[]` for parallel workers when the questions are independent. Default to read-only. Only enable `allowWrite` for explicit implementation work.
 
@@ -65,15 +59,9 @@ If uncertain: inspect the existing thread once, then choose.
 
 ## Return mode
 
-`wait` — sysop blocks until the worker reaches a terminal state, then returns with synthesized output. Use when the user wants a single answer now.
+Sysop waits for delegated workers to reach a terminal state and returns the results in the same turn.
 
-`async` — sysop returns after launch. Completion steers deliver the result later. Use when the user can continue working while the worker runs.
-
-`notificationMode`:
-- `wait_all` — the batch reports once after all workers finish. Use when you want combined synthesis.
-- `notify_each` — each worker reports individually. Use when intermediate completions are useful for steering.
-
-After launching async work: stop and wait for the completion steer. Don't narrate status checks. Don't poll with `codex_inspect`.
+For multi-worker batches, spawn them together and wait for the combined result. Don't simulate background work by polling with `codex_inspect` or narrating status checks.
 
 ---
 
