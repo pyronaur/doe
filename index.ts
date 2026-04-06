@@ -154,20 +154,9 @@ export default function doeExtension(pi: ExtensionAPI) {
 	}
 
 	async function buildGuidanceMessage(): Promise<string> {
-		const system = loadMarkdownDoc(join(PROMPTS_DIR, "doe-system.md"))?.body ?? "";
-		const decision = loadMarkdownDoc(join(PROMPTS_DIR, "decision-guidance.md"))?.body ?? "";
-		const templates = summarizeTemplates(loadMarkdownDocs(TEMPLATES_DIR));
-		return [
-			"[DIRECTOR OF ENGINEERING MODE]",
-			system,
-			"",
-			decision,
-			"",
-			"Installed templates:",
-			templates,
-			"",
-			`Active tools: ${TOOL_NAMES.join(", ")}`,
-		].join("\n");
+		const system = loadMarkdownDoc(join(PROMPTS_DIR, "doe-system.md"))?.body?.trim() ?? "";
+		const decision = loadMarkdownDoc(join(PROMPTS_DIR, "decision-guidance.md"))?.body?.trim() ?? "";
+		return [system, decision].filter((part) => part.length > 0).join("\n\n");
 	}
 
 	async function restoreState(ctx: ExtensionContext) {
@@ -260,12 +249,12 @@ export default function doeExtension(pi: ExtensionAPI) {
 		updateUi(ctx);
 	});
 
-	pi.on("before_agent_start", async (event) => {
+	pi.on("before_agent_start", async (_event) => {
 		if (!isDoeEnabled()) return;
 		activate();
 		const guidance = await buildGuidanceMessage();
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n${guidance}`,
+			systemPrompt: guidance,
 		};
 	});
 
