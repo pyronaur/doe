@@ -10,6 +10,7 @@ export interface ThreadSummary {
 	turns?: Array<{
 		id: string;
 		status: string;
+		createdAt?: string | number | null;
 		error?: { message?: string | null } | null;
 		items?: Array<any>;
 	}>;
@@ -19,6 +20,16 @@ export interface ThreadMessageEntry {
 	turnId: string;
 	role: "user" | "agent";
 	text: string;
+}
+
+export interface ThreadTranscriptEntry {
+	turnId: string;
+	itemId: string | null;
+	role: "user" | "agent";
+	text: string;
+	streaming: boolean;
+	createdAt: number;
+	completedAt?: number | null;
 }
 
 export type AgentActivity =
@@ -100,21 +111,47 @@ export function getThreadItemText(item: any): string {
 	return "";
 }
 
-export function extractThreadMessages(thread: ThreadSummary | null | undefined): ThreadMessageEntry[] {
-	const messages: ThreadMessageEntry[] = [];
+function parseTimestamp(value: unknown, fallback: number): number {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string") {
+		const parsed = Date.parse(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return fallback;
+}
+
+export function extractThreadTranscript(thread: ThreadSummary | null | undefined): ThreadTranscriptEntry[] {
+	const messages: ThreadTranscriptEntry[] = [];
+	let fallbackTime = 1;
+
 	for (const turn of thread?.turns ?? []) {
 		for (const item of turn.items ?? []) {
 			if (item?.type !== "userMessage" && item?.type !== "agentMessage") continue;
 			const text = getThreadItemText(item);
 			if (!text) continue;
+			const createdAt = parseTimestamp(item?.createdAt ?? turn?.createdAt, fallbackTime++);
+			const completedAt = item?.type === "agentMessage" ? parseTimestamp(item?.completedAt, createdAt) : createdAt;
 			messages.push({
 				turnId: turn.id,
+				itemId: typeof item?.id === "string" ? item.id : null,
 				role: item.type === "userMessage" ? "user" : "agent",
 				text,
+				streaming: false,
+				createdAt,
+				completedAt,
 			});
 		}
 	}
+
 	return messages;
+}
+
+export function extractThreadMessages(thread: ThreadSummary | null | undefined): ThreadMessageEntry[] {
+	return extractThreadTranscript(thread).map((message) => ({
+		turnId: message.turnId,
+		role: message.role,
+		text: message.text,
+	}));
 }
 
 export function extractTurnMessages(thread: ThreadSummary | null | undefined): {

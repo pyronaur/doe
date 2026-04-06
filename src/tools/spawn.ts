@@ -199,6 +199,8 @@ async function executeSpawnLike(
 			returnMode,
 			completionNotified: false,
 			recovered: false,
+			messages: [],
+			historyHydratedAt: null,
 		});
 
 		onUpdate?.({
@@ -227,6 +229,7 @@ async function executeSpawnLike(
 		});
 		deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id, activeTurnId: turn.turn.id });
 		deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
+		deps.registry.appendUserMessage(agentId, turn.turn.id, prompt);
 		createdAgents.push(deps.registry.getAgent(agentId));
 	}
 

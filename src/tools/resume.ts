@@ -108,6 +108,8 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				notificationMode,
 				returnMode,
 				completionNotified: false,
+				messages: agent.messages ?? [],
+				historyHydratedAt: agent.historyHydratedAt ?? null,
 			});
 
 			if (agent.activeTurnId && agent.state === "working") {
@@ -119,6 +121,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 					expectedTurnId: agent.activeTurnId,
 					prompt,
 				});
+				deps.registry.appendUserMessage(agent.id, agent.activeTurnId, prompt);
 			} else {
 				await deps.client.resumeThread({
 					threadId: agent.threadId,
@@ -139,6 +142,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				});
 				deps.registry.markThreadAttached(agent.id, { threadId: agent.threadId, activeTurnId: turn.turn.id });
 				deps.registry.markTurnStarted(agent.threadId, turn.turn.id);
+				deps.registry.appendUserMessage(agent.id, turn.turn.id, prompt);
 			}
 
 			const finalAgent = await deps.registry.waitForAgent(agent.id, signal);

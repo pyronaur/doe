@@ -5,6 +5,16 @@ export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_
 export type NotificationMode = "wait_all" | "notify_each";
 export type ReturnMode = "wait";
 
+export interface AgentMessageRecord {
+	turnId: string;
+	itemId: string | null;
+	role: "user" | "agent";
+	text: string;
+	streaming: boolean;
+	createdAt: number;
+	completedAt?: number | null;
+}
+
 export interface AgentRecord {
 	id: string;
 	name: string;
@@ -27,6 +37,8 @@ export interface AgentRecord {
 	returnMode: ReturnMode;
 	completionNotified?: boolean;
 	recovered?: boolean;
+	messages: AgentMessageRecord[];
+	historyHydratedAt?: number | null;
 }
 
 export interface BatchRecord {
@@ -92,6 +104,67 @@ function tailSnippet(text: string, maxChars = 1800, maxLines = 12): string {
 	return output;
 }
 
+function cloneMessage(message: AgentMessageRecord): AgentMessageRecord {
+	return { ...message, completedAt: message.completedAt ?? null };
+}
+
+function cloneAgent(agent: AgentRecord): AgentRecord {
+	return {
+		...agent,
+		messages: (agent.messages ?? []).map(cloneMessage),
+		historyHydratedAt: agent.historyHydratedAt ?? null,
+	};
+}
+
+function sameLogicalMessage(a: AgentMessageRecord, b: AgentMessageRecord): boolean {
+	if (a.itemId && b.itemId) return a.itemId === b.itemId;
+	if (a.role !== b.role || a.turnId !== b.turnId) return false;
+	if (a.role === "user") return true;
+	if (!a.text || !b.text) return false;
+	return a.text === b.text || a.text.startsWith(b.text) || b.text.startsWith(a.text);
+}
+
+export function mergeHydratedMessages(current: AgentMessageRecord[], hydrated: AgentMessageRecord[]): AgentMessageRecord[] {
+	const live = current.map(cloneMessage);
+	const history = hydrated.map(cloneMessage);
+	if (live.length === 0) return history;
+	if (history.length === 0) return live;
+
+	let bestOffset = -1;
+	let bestOverlap = 0;
+	for (let offset = 0; offset < history.length; offset += 1) {
+		let overlap = 0;
+		while (
+			offset + overlap < history.length &&
+			overlap < live.length &&
+			sameLogicalMessage(history[offset + overlap]!, live[overlap]!)
+		) {
+			overlap += 1;
+		}
+		if (overlap === 0) continue;
+		if (overlap > bestOverlap) {
+			bestOverlap = overlap;
+			bestOffset = offset;
+		}
+	}
+
+	if (bestOverlap > 0) {
+		return [...history.slice(0, bestOffset), ...live];
+	}
+
+	const mergedHistory = history.filter((message) => !live.some((entry) => sameLogicalMessage(entry, message)));
+	return [...mergedHistory, ...live];
+}
+
+function latestAgentSummary(messages: AgentMessageRecord[]): { latestSnippet: string; latestFinalOutput: string | null } | null {
+	const lastAgentMessage = [...messages].reverse().find((message) => message.role === "agent" && message.text.trim().length > 0);
+	if (!lastAgentMessage) return null;
+	return {
+		latestSnippet: tailSnippet(lastAgentMessage.text),
+		latestFinalOutput: lastAgentMessage.streaming ? null : lastAgentMessage.text,
+	};
+}
+
 export class DoeRegistry extends EventEmitter {
 	private readonly agents = new Map<string, AgentRecord>();
 	private readonly batches = new Map<string, BatchRecord>();
@@ -122,7 +195,7 @@ export class DoeRegistry extends EventEmitter {
 
 	upsertAgent(agent: AgentRecord): AgentRecord {
 		const previous = this.agents.get(agent.id);
-		const next = { ...agent };
+		const next = cloneAgent(agent);
 		this.agents.set(agent.id, next);
 		const current = this.getAgent(agent.id)!;
 		this.emit("event", { type: "agent-updated", agent: current } satisfies RegistryEvent);
@@ -136,12 +209,12 @@ export class DoeRegistry extends EventEmitter {
 
 	getAgent(id: string): AgentRecord | undefined {
 		const agent = this.agents.get(id);
-		return agent ? { ...agent } : undefined;
+		return agent ? cloneAgent(agent) : undefined;
 	}
 
 	getAgentByThreadId(threadId: string): AgentRecord | undefined {
 		for (const agent of this.agents.values()) {
-			if (agent.threadId === threadId) return { ...agent };
+			if (agent.threadId === threadId) return cloneAgent(agent);
 		}
 		return undefined;
 	}
@@ -151,7 +224,7 @@ export class DoeRegistry extends EventEmitter {
 		if (exact) return exact;
 		const normalized = identifier.trim().toLowerCase();
 		for (const agent of this.agents.values()) {
-			if (agent.name.trim().toLowerCase() === normalized) return { ...agent };
+			if (agent.name.trim().toLowerCase() === normalized) return cloneAgent(agent);
 		}
 		return undefined;
 	}
@@ -171,7 +244,7 @@ export class DoeRegistry extends EventEmitter {
 		});
 		agents.sort((a, b) => b.startedAt - a.startedAt);
 		if (typeof limit === "number") agents = agents.slice(0, limit);
-		return agents.map((agent) => ({ ...agent }));
+		return agents.map(cloneAgent);
 	}
 
 	listBatches(limit?: number): BatchRecord[] {
@@ -231,6 +304,113 @@ export class DoeRegistry extends EventEmitter {
 		}));
 	}
 
+	appendUserMessage(agentId: string, turnId: string, text: string) {
+		this.updateAgent(agentId, (agent) => {
+			const nextMessages = [
+				...agent.messages,
+				{
+					turnId,
+					itemId: null,
+					role: "user",
+					text,
+					streaming: false,
+					createdAt: Date.now(),
+					completedAt: Date.now(),
+				} satisfies AgentMessageRecord,
+			];
+			return {
+				...agent,
+				messages: nextMessages,
+			};
+		});
+	}
+
+	appendAgentMessageDelta(threadId: string, turnId: string, itemId: string, delta: string) {
+		this.updateAgentByThread(threadId, (agent) => {
+			const nextMessages = [...agent.messages];
+			const index = nextMessages.findIndex((message) => message.itemId === itemId);
+			if (index >= 0) {
+				const current = nextMessages[index]!;
+				nextMessages[index] = {
+					...current,
+					turnId,
+					text: `${current.text}${delta}`,
+					streaming: true,
+					completedAt: null,
+				};
+			} else {
+				nextMessages.push({
+					turnId,
+					itemId,
+					role: "agent",
+					text: delta,
+					streaming: true,
+					createdAt: Date.now(),
+					completedAt: null,
+				});
+			}
+			const summary = latestAgentSummary(nextMessages);
+			return {
+				...agent,
+				messages: nextMessages,
+				latestSnippet: summary?.latestSnippet ?? agent.latestSnippet,
+				latestFinalOutput: summary?.latestFinalOutput ?? null,
+			};
+		});
+	}
+
+	completeAgentMessage(threadId: string, turnId: string, itemId: string, text: string) {
+		this.updateAgentByThread(threadId, (agent) => {
+			const nextMessages = [...agent.messages];
+			const index = nextMessages.findIndex((message) => message.itemId === itemId);
+			const completedAt = Date.now();
+			if (index >= 0) {
+				nextMessages[index] = {
+					...nextMessages[index]!,
+					turnId,
+					text,
+					streaming: false,
+					completedAt,
+				};
+			} else {
+				nextMessages.push({
+					turnId,
+					itemId,
+					role: "agent",
+					text,
+					streaming: false,
+					createdAt: completedAt,
+					completedAt,
+				});
+			}
+			const summary = latestAgentSummary(nextMessages);
+			return {
+				...agent,
+				messages: nextMessages,
+				latestSnippet: summary?.latestSnippet ?? agent.latestSnippet,
+				latestFinalOutput: summary?.latestFinalOutput ?? agent.latestFinalOutput ?? null,
+			};
+		});
+	}
+
+	hydrateAgentMessages(agentId: string, messages: AgentMessageRecord[]) {
+		this.updateAgent(agentId, (agent) => {
+			const nextMessages = mergeHydratedMessages(agent.messages, messages);
+			const summary = latestAgentSummary(nextMessages);
+			return {
+				...agent,
+				messages: nextMessages,
+				historyHydratedAt: Date.now(),
+				latestSnippet: summary?.latestSnippet ?? agent.latestSnippet,
+				latestFinalOutput: summary?.latestFinalOutput ?? agent.latestFinalOutput ?? null,
+			};
+		});
+	}
+
+	getAgentMessages(agentId: string): AgentMessageRecord[] {
+		return (this.agents.get(agentId)?.messages ?? []).map(cloneMessage);
+	}
+
 	setAgentSnippet(threadId: string, text: string) {
 		this.updateAgentByThread(threadId, (agent) => ({
 			...agent,
@@ -240,15 +420,19 @@ export class DoeRegistry extends EventEmitter {
 	}
 
 	markCompleted(threadId: string, finalOutput?: string | null) {
-		this.updateAgentByThread(threadId, (agent) => ({
-			...agent,
-			state: "completed",
-			activityLabel: "completed",
-			completedAt: Date.now(),
-			activeTurnId: null,
-			latestFinalOutput: finalOutput ?? agent.latestFinalOutput ?? agent.latestSnippet,
-			latestSnippet: finalOutput ? tailSnippet(finalOutput) : agent.latestSnippet,
-		}));
+		this.updateAgentByThread(threadId, (agent) => {
+			const summary = latestAgentSummary(agent.messages);
+			const output = finalOutput ?? summary?.latestFinalOutput ?? agent.latestFinalOutput ?? agent.latestSnippet;
+			return {
+				...agent,
+				state: "completed",
+				activityLabel: "completed",
+				completedAt: Date.now(),
+				activeTurnId: null,
+				latestFinalOutput: output,
+				latestSnippet: output ? tailSnippet(output) : agent.latestSnippet,
+			};
+		});
 	}
 
 	markAwaitingInput(threadId: string, note?: string | null) {
@@ -288,9 +472,9 @@ export class DoeRegistry extends EventEmitter {
 
 	waitForAgent(agentId: string, signal?: AbortSignal): Promise<AgentRecord> {
 		const existing = this.agents.get(agentId);
-		if (existing && TERMINAL_STATES.has(existing.state)) return Promise.resolve({ ...existing });
+		if (existing && TERMINAL_STATES.has(existing.state)) return Promise.resolve(cloneAgent(existing));
 		return new Promise<AgentRecord>((resolve, reject) => {
-			const waiter = (agent: AgentRecord) => resolve({ ...agent });
+			const waiter = (agent: AgentRecord) => resolve(cloneAgent(agent));
 			const current = this.agentWaiters.get(agentId) ?? [];
 			current.push(waiter);
 			this.agentWaiters.set(agentId, current);
@@ -318,10 +502,10 @@ export class DoeRegistry extends EventEmitter {
 		if (!batch) return Promise.resolve([]);
 		const currentAgents = batch.agentIds.map((id) => this.agents.get(id)).filter(Boolean) as AgentRecord[];
 		if (currentAgents.length > 0 && currentAgents.every((agent) => TERMINAL_STATES.has(agent.state))) {
-			return Promise.resolve(currentAgents.map((agent) => ({ ...agent })));
+			return Promise.resolve(currentAgents.map(cloneAgent));
 		}
 		return new Promise<AgentRecord[]>((resolve, reject) => {
-			const waiter = (agents: AgentRecord[]) => resolve(agents.map((agent) => ({ ...agent })));
+			const waiter = (agents: AgentRecord[]) => resolve(agents.map(cloneAgent));
 			const current = this.batchWaiters.get(batchId) ?? [];
 			current.push(waiter);
 			this.batchWaiters.set(batchId, current);
@@ -331,7 +515,7 @@ export class DoeRegistry extends EventEmitter {
 					const currentBatch = this.batches.get(batchId);
 					const currentBatchAgents = currentBatch?.agentIds.map((id) => this.agents.get(id)).filter(Boolean) as AgentRecord[];
 					if (currentBatchAgents.length > 0 && currentBatchAgents.every((agent) => TERMINAL_STATES.has(agent.state))) {
-						resolve(currentBatchAgents.map((agent) => ({ ...agent })));
+						resolve(currentBatchAgents.map(cloneAgent));
 						return;
 					}
 					this.batchWaiters.set(
@@ -347,7 +531,7 @@ export class DoeRegistry extends EventEmitter {
 
 	serialize(): PersistedRegistrySnapshot {
 		return {
-			version: 1,
+			version: 2,
 			savedAt: Date.now(),
 			agents: this.listAgents(),
 			batches: this.listBatches(),
@@ -363,7 +547,7 @@ export class DoeRegistry extends EventEmitter {
 		}
 		for (const agent of snapshot.agents ?? []) {
 			this.agents.set(agent.id, {
-				...agent,
+				...cloneAgent(agent),
 				returnMode: "wait",
 				activityLabel:
 					agent.activityLabel ??
@@ -375,6 +559,8 @@ export class DoeRegistry extends EventEmitter {
 								? "awaiting input"
 								: "thinking"),
 				recovered: true,
+				messages: (agent.messages ?? []).map(cloneMessage),
+				historyHydratedAt: agent.historyHydratedAt ?? null,
 			});
 		}
 		for (const batch of snapshot.batches ?? []) {
@@ -386,13 +572,13 @@ export class DoeRegistry extends EventEmitter {
 	private updateAgent(agentId: string, updater: (agent: AgentRecord) => AgentRecord) {
 		const current = this.agents.get(agentId);
 		if (!current) return;
-		this.upsertAgent(updater({ ...current }));
+		this.upsertAgent(updater(cloneAgent(current)));
 	}
 
 	private updateAgentByThread(threadId: string, updater: (agent: AgentRecord) => AgentRecord) {
 		for (const agent of this.agents.values()) {
 			if (agent.threadId === threadId) {
-				this.upsertAgent(updater({ ...agent }));
+				this.upsertAgent(updater(cloneAgent(agent)));
 				return;
 			}
 		}
@@ -401,8 +587,8 @@ export class DoeRegistry extends EventEmitter {
 	private resolveAgent(agent: AgentRecord) {
 		const waiters = this.agentWaiters.get(agent.id) ?? [];
 		this.agentWaiters.delete(agent.id);
-		for (const waiter of waiters) waiter({ ...agent });
-		this.emit("event", { type: "agent-terminal", agent: { ...agent } } satisfies RegistryEvent);
+		for (const waiter of waiters) waiter(cloneAgent(agent));
+		this.emit("event", { type: "agent-terminal", agent: cloneAgent(agent) } satisfies RegistryEvent);
 	}
 
 	private checkBatchCompletion(batchId?: string) {
@@ -417,11 +603,11 @@ export class DoeRegistry extends EventEmitter {
 		this.batches.set(batch.id, nextBatch);
 		const waiters = this.batchWaiters.get(batch.id) ?? [];
 		this.batchWaiters.delete(batch.id);
-		for (const waiter of waiters) waiter(agents.map((agent) => ({ ...agent })));
+		for (const waiter of waiters) waiter(agents.map(cloneAgent));
 		this.emit("event", {
 			type: "batch-completed",
 			batch: { ...nextBatch, agentIds: [...nextBatch.agentIds] },
-			agents: agents.map((agent) => ({ ...agent })),
+			agents: agents.map(cloneAgent),
 		} satisfies RegistryEvent);
 	}
 

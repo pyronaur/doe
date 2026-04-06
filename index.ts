@@ -5,7 +5,7 @@ import { CodexAppServerClient } from "./src/codex/app-server-client.js";
 import { validateModelId } from "./src/codex/model-selection.js";
 import type { CodexClientEvent } from "./src/codex/client.js";
 import { DoeRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
-import { AgentSidebarController } from "./src/ui/agent-sidebar.js";
+import { AgentLiveViewController, formatElapsed } from "./src/ui/agent-live-view.js";
 import { loadMarkdownDoc, loadMarkdownDocs, summarizeTemplates } from "./src/templates/loader.js";
 import { registerSpawnTool } from "./src/tools/spawn.js";
 import { registerResumeTool } from "./src/tools/resume.js";
@@ -22,15 +22,20 @@ const TEMPLATES_DIR = join(__dirname, "templates");
 interface DoeRuntime {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
-	sidebar: AgentSidebarController;
+	liveView: AgentLiveViewController;
 	latestCtx: ExtensionContext | null;
 	persistTimer: ReturnType<typeof setTimeout> | null;
 }
 
-function formatActiveSummary(registry: DoeRegistry): string[] {
-	const agents = registry.listAgents({ includeCompleted: false, limit: 3 });
+function formatActiveWidget(registry: DoeRegistry): string[] {
+	const agents = registry.listAgents({ includeCompleted: false });
 	if (agents.length === 0) return [];
-	return agents.map((agent) => `• ${agent.name}: ${agent.activityLabel ?? agent.state}`);
+	return [
+		`DoE Active Agents (${agents.length})`,
+		"Currently running workstreams:",
+		...agents.map((agent, index) => `${index + 1}. ${agent.name} | ${agent.activityLabel ?? agent.state} | ${formatElapsed(agent.startedAt, agent.completedAt)}`),
+		"Open /doe-sidebar for the live monitor",
+	];
 }
 
 function latestSnapshot(ctx: ExtensionContext): PersistedRegistrySnapshot | null {
@@ -73,11 +78,11 @@ export default function doeExtension(pi: ExtensionAPI) {
 
 		const client = new CodexAppServerClient({ serviceName: "pi_doe" });
 		const registry = new DoeRegistry();
-		const sidebar = new AgentSidebarController(registry);
+		const liveView = new AgentLiveViewController(registry, client);
 		runtime = {
 			client,
 			registry,
-			sidebar,
+			liveView,
 			latestCtx: ctx ?? null,
 			persistTimer: null,
 		};
@@ -92,7 +97,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 		registerCancelTool(pi, { client, registry });
 
 		pi.registerCommand("doe-sidebar", {
-			description: "Toggle the persistent Director of Engineering sidebar",
+			description: "Open or close the Director of Engineering live agent view",
 			handler: async (_args, commandCtx) => {
 				const activeRuntime = activate(commandCtx);
 				if (!activeRuntime) {
@@ -100,8 +105,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 					return;
 				}
 				activeRuntime.latestCtx = commandCtx;
-				activeRuntime.sidebar.open(commandCtx);
-				activeRuntime.sidebar.toggle();
+				activeRuntime.liveView.toggle(commandCtx);
 			},
 		});
 
@@ -148,9 +152,9 @@ export default function doeExtension(pi: ExtensionAPI) {
 		if (!runtime || !ctx.hasUI) return;
 		const active = runtime.registry.listAgents({ includeCompleted: false }).length;
 		ctx.ui.setStatus("doe", ctx.ui.theme.fg("accent", `🧭 DoE ${active} active`));
-		const summary = formatActiveSummary(runtime.registry);
-		ctx.ui.setWidget("doe-active", summary.length > 0 ? summary : undefined, { placement: "belowEditor" });
-		runtime.sidebar.requestRender();
+		const widget = formatActiveWidget(runtime.registry);
+		ctx.ui.setWidget("doe-active", widget.length > 0 ? widget : undefined, { placement: "aboveEditor" });
+		runtime.liveView.requestRender();
 	}
 
 	async function buildGuidanceMessage(): Promise<string> {
@@ -201,13 +205,13 @@ export default function doeExtension(pi: ExtensionAPI) {
 				runtime.registry.markTurnStarted(event.threadId, event.turnId);
 				break;
 			case "agent-message-delta":
-				runtime.registry.appendAgentDelta(event.threadId, event.delta);
+				runtime.registry.appendAgentMessageDelta(event.threadId, event.turnId, event.itemId, event.delta);
 				break;
 			case "agent-activity":
 				runtime.registry.markActivity(event.threadId, event.activity);
 				break;
 			case "agent-message-complete":
-				runtime.registry.setAgentSnippet(event.threadId, event.text);
+				runtime.registry.completeAgentMessage(event.threadId, event.turnId, event.itemId, event.text);
 				break;
 			case "turn-completed":
 				if (event.status === "completed") {
@@ -235,7 +239,6 @@ export default function doeExtension(pi: ExtensionAPI) {
 		activeRuntime.latestCtx = ctx;
 		applyToolSurface();
 		await restoreState(ctx);
-		activeRuntime.sidebar.open(ctx);
 		updateUi(ctx);
 	});
 
@@ -245,7 +248,6 @@ export default function doeExtension(pi: ExtensionAPI) {
 		activeRuntime.latestCtx = ctx;
 		applyToolSurface();
 		await restoreState(ctx);
-		activeRuntime.sidebar.open(ctx);
 		updateUi(ctx);
 	});
 
