@@ -217,7 +217,10 @@ async function executeSpawnLike(
 			const approvalPolicy = (rawTask.approvalPolicy ?? "never") as ApprovalPolicy;
 			const networkAccess = rawTask.networkAccess ?? false;
 			const sessionSlug = deps.getSessionSlug?.() ?? null;
-			const sharedContext = sessionSlug ? getSharedKnowledgebaseContext(cwd, sessionSlug) : null;
+			if (!sessionSlug) {
+				throw new Error("No canonical session slug is set. Call session_set before codex_spawn.");
+			}
+			const sharedContext = getSharedKnowledgebaseContext(cwd, sessionSlug);
 			const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir, sharedContext);
 			const explicitModel = readOptionalModelId(rawTask.model, "model");
 			const model = validateModelId(explicitModel ?? templateDefaultModel ?? "gpt-5.4-mini", explicitModel ? "model" : "resolved model");

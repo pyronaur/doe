@@ -130,7 +130,10 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			const approvalPolicy = (params.approvalPolicy ?? "never") as ApprovalPolicy;
 			const networkAccess = params.networkAccess ?? false;
 			const sessionSlug = deps.getSessionSlug?.() ?? null;
-			const sharedContext = sessionSlug ? getSharedKnowledgebaseContext(agent.cwd, sessionSlug) : null;
+			if (!sessionSlug) {
+				throw new Error("No canonical session slug is set. Call session_set before codex_resume.");
+			}
+			const sharedContext = getSharedKnowledgebaseContext(agent.cwd, sessionSlug);
 			const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(params, deps.templatesDir, sharedContext);
 			const effort = (params.effort ?? templateDefaultEffort ?? agent.effort ?? "medium") as ReasoningEffort;
 			const explicitModel = readOptionalModelId(params.model, "model");
