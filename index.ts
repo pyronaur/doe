@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { CodexAppServerClient } from "./src/codex/app-server-client.js";
 import type { CodexClientEvent } from "./src/codex/client.js";
-import { SysopRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
+import { DoeRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
 import { AgentSidebarController } from "./src/ui/agent-sidebar.js";
 import { loadMarkdownDoc, loadMarkdownDocs, summarizeTemplates } from "./src/templates/loader.js";
 import { registerSpawnTool } from "./src/tools/spawn.js";
@@ -17,7 +17,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = join(__dirname, "prompts");
 const TEMPLATES_DIR = join(__dirname, "templates");
 
-function formatActiveSummary(registry: SysopRegistry): string[] {
+function formatActiveSummary(registry: DoeRegistry): string[] {
 	const agents = registry.listAgents({ includeCompleted: false, limit: 3 });
 	if (agents.length === 0) return [];
 	return agents.map((agent) => `• ${agent.name}: ${agent.activityLabel ?? agent.state}`);
@@ -27,16 +27,16 @@ function latestSnapshot(ctx: ExtensionContext): PersistedRegistrySnapshot | null
 	const branch = ctx.sessionManager.getBranch();
 	for (let i = branch.length - 1; i >= 0; i--) {
 		const entry = branch[i] as any;
-		if (entry?.type === "custom" && entry?.customType === "sysop-registry") {
+		if (entry?.type === "custom" && entry?.customType === "doe-registry") {
 			return entry.data as PersistedRegistrySnapshot;
 		}
 	}
 	return null;
 }
 
-export default function sysopExtension(pi: ExtensionAPI) {
-	const client = new CodexAppServerClient({ serviceName: "pi_sysop" });
-	const registry = new SysopRegistry();
+export default function doeExtension(pi: ExtensionAPI) {
+	const client = new CodexAppServerClient({ serviceName: "pi_doe" });
+	const registry = new DoeRegistry();
 	const sidebar = new AgentSidebarController(registry);
 	let latestCtx: ExtensionContext | null = null;
 	let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -50,32 +50,32 @@ export default function sysopExtension(pi: ExtensionAPI) {
 			clearTimeout(persistTimer);
 			persistTimer = null;
 		}
-		pi.appendEntry("sysop-registry", registry.serialize());
+		pi.appendEntry("doe-registry", registry.serialize());
 	}
 
 	function schedulePersist() {
 		if (persistTimer) clearTimeout(persistTimer);
 		persistTimer = setTimeout(() => {
 			persistTimer = null;
-			pi.appendEntry("sysop-registry", registry.serialize());
+			pi.appendEntry("doe-registry", registry.serialize());
 		}, 5000);
 	}
 
 	function updateUi(ctx: ExtensionContext) {
 		if (!ctx.hasUI) return;
 		const active = registry.listAgents({ includeCompleted: false }).length;
-		ctx.ui.setStatus("sysop", ctx.ui.theme.fg("accent", `🧭 sysop ${active} active`));
+		ctx.ui.setStatus("doe", ctx.ui.theme.fg("accent", `🧭 DoE ${active} active`));
 		const summary = formatActiveSummary(registry);
-		ctx.ui.setWidget("sysop-active", summary.length > 0 ? summary : undefined, { placement: "belowEditor" });
+		ctx.ui.setWidget("doe-active", summary.length > 0 ? summary : undefined, { placement: "belowEditor" });
 		sidebar.requestRender();
 	}
 
 	async function buildGuidanceMessage(): Promise<string> {
-		const system = loadMarkdownDoc(join(PROMPTS_DIR, "sysop-system.md"))?.body ?? "";
+		const system = loadMarkdownDoc(join(PROMPTS_DIR, "doe-system.md"))?.body ?? "";
 		const decision = loadMarkdownDoc(join(PROMPTS_DIR, "decision-guidance.md"))?.body ?? "";
 		const templates = summarizeTemplates(loadMarkdownDocs(TEMPLATES_DIR));
 		return [
-			"[SYSOP ORCHESTRATION MODE]",
+			"[DIRECTOR OF ENGINEERING MODE]",
 			system,
 			"",
 			decision,
@@ -162,8 +162,8 @@ export default function sysopExtension(pi: ExtensionAPI) {
 	registerInspectTool(pi, { client, registry });
 	registerCancelTool(pi, { client, registry });
 
-	pi.registerCommand("sysop-sidebar", {
-		description: "Toggle the persistent sysop sidebar",
+	pi.registerCommand("doe-sidebar", {
+		description: "Toggle the persistent Director of Engineering sidebar",
 		handler: async (_args, ctx) => {
 			latestCtx = ctx;
 			sidebar.open(ctx);
@@ -171,8 +171,8 @@ export default function sysopExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("sysop-templates", {
-		description: "Show installed sysop templates",
+	pi.registerCommand("doe-templates", {
+		description: "Show installed Director of Engineering templates",
 		handler: async (_args, ctx) => {
 			const text = summarizeTemplates(loadMarkdownDocs(TEMPLATES_DIR));
 			ctx.ui.notify(text, "info");

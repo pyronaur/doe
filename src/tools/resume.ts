@@ -4,7 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
-import type { NotificationMode, SysopRegistry } from "../state/registry.js";
+import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
@@ -12,7 +12,7 @@ const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrust
 
 interface ResumeToolDeps {
 	client: CodexAppServerClient;
-	registry: SysopRegistry;
+	registry: DoeRegistry;
 	templatesDir: string;
 }
 

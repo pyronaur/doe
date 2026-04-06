@@ -5,7 +5,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
-import type { NotificationMode, SysopRegistry } from "../state/registry.js";
+import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
@@ -41,7 +41,7 @@ const SpawnParametersSchema = Type.Object({
 
 interface SpawnToolDeps {
 	client: CodexAppServerClient;
-	registry: SysopRegistry;
+	registry: DoeRegistry;
 	templatesDir: string;
 }
 
@@ -258,7 +258,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			const agents = Array.isArray(details.agents) ? details.agents : [];
 			const batch = details.batchId ? `batch=${details.batchId}` : "single";
 			const body = agents.length > 0 ? summarizeAgents(agents) : result.content?.[0]?.text ?? "Spawned";
-			return new Text(`${theme.fg("accent", `sysop ${batch}`)}\n${body}`, 0, 0);
+			return new Text(`${theme.fg("accent", `DoE ${batch}`)}\n${body}`, 0, 0);
 		},
 		async execute(_toolCallId, params, signal, onUpdate) {
 			return executeSpawnLike(params, signal, onUpdate as any, deps);

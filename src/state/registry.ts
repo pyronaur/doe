@@ -92,7 +92,7 @@ function tailSnippet(text: string, maxChars = 1800, maxLines = 12): string {
 	return output;
 }
 
-export class SysopRegistry extends EventEmitter {
+export class DoeRegistry extends EventEmitter {
 	private readonly agents = new Map<string, AgentRecord>();
 	private readonly batches = new Map<string, BatchRecord>();
 	private readonly agentWaiters = new Map<string, Array<(agent: AgentRecord) => void>>();

@@ -66,7 +66,7 @@ export class CodexAppServerClient extends EventEmitter {
 			});
 			this.proc.stderr.on("data", (data) => {
 				const text = String(data).trim();
-				if (text) console.error(`[sysop/codex] ${text}`);
+				if (text) console.error(`[doe/codex] ${text}`);
 			});
 			this.proc.on("exit", (code, signal) => {
 				const reason = `Codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"})`;
@@ -82,8 +82,8 @@ export class CodexAppServerClient extends EventEmitter {
 
 			await this.requestRaw("initialize", {
 				clientInfo: {
-					name: "pi_sysop",
-					title: "Pi Sysop",
+					name: "pi_doe",
+					title: "Pi Director of Engineering",
 					version: "0.1.0",
 				},
 				capabilities: {
@@ -108,7 +108,7 @@ export class CodexAppServerClient extends EventEmitter {
 			cwd: options.cwd,
 			approvalPolicy: options.approvalPolicy ?? "never",
 			sandbox: allowWrite ? "danger-full-access" : "read-only",
-			serviceName: options.serviceName ?? this.options.serviceName ?? "pi_sysop",
+			serviceName: options.serviceName ?? this.options.serviceName ?? "pi_doe",
 			baseInstructions: options.baseInstructions ?? null,
 			developerInstructions: options.developerInstructions ?? null,
 			ephemeral: options.ephemeral ?? false,
@@ -230,7 +230,7 @@ export class CodexAppServerClient extends EventEmitter {
 		try {
 			message = JSON.parse(line);
 		} catch (error) {
-			console.error(`[sysop/codex] Failed to parse JSON line: ${line}`);
+			console.error(`[doe/codex] Failed to parse JSON line: ${line}`);
 			return;
 		}
 

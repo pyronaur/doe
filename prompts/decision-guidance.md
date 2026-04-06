@@ -1,4 +1,4 @@
-# Sysop delegation guidance
+# Director of Engineering delegation guidance
 
 ---
 
@@ -59,7 +59,7 @@ If uncertain: inspect the existing thread once, then choose.
 
 ## Return mode
 
-Sysop waits for delegated workers to reach a terminal state and returns the results in the same turn.
+Director of Engineering waits for delegated workers to reach a terminal state and returns the results in the same turn.
 
 For multi-worker batches, spawn them together and wait for the combined result. Don't simulate background work by polling with `codex_inspect` or narrating status checks.
 
@@ -73,7 +73,7 @@ Use the template as a scaffold and the task text as the specific instruction. If
 
 Good prompt: one sentence on the goal, constraints, specific artifacts to inspect or modify, expected deliverable.
 
-Avoid: vague "look into this" prompts, multiple unrelated tasks in one worker, hidden assumptions about write access, asking sysop to do the analysis that belongs in the worker.
+Avoid: vague "look into this" prompts, multiple unrelated tasks in one worker, hidden assumptions about write access, asking the Director of Engineering to do the analysis that belongs in the worker.
 
 ---
 

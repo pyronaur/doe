@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { SysopRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../state/registry.js";
 
 function formatElapsed(startedAt: number, completedAt?: number | null): string {
 	const end = completedAt ?? Date.now();
@@ -73,7 +73,7 @@ function wrapPlainText(text: string, width: number, maxLines: number): string[] 
 }
 
 class SidebarComponent {
-	constructor(private readonly registry: SysopRegistry, private readonly theme: any) {}
+	constructor(private readonly registry: DoeRegistry, private readonly theme: any) {}
 
 	render(width: number): string[] {
 		const lines: string[] = [];
@@ -82,7 +82,7 @@ class SidebarComponent {
 		const messageWidth = Math.max(12, inner - 1);
 		const agents = this.registry.listAgents({ includeCompleted: true, limit: 6 });
 		const activeCount = agents.filter((agent) => agent.state === "working").length;
-		const title = ` Sysop agents (${activeCount} active) `;
+		const title = ` DoE agents (${activeCount} active) `;
 		const borderLeft = th.fg("border", "│");
 		const remaining = Math.max(0, inner - title.length);
 		const left = Math.floor(remaining / 2);
@@ -135,7 +135,7 @@ export class AgentSidebarController {
 	private hidden = false;
 	private ticker: ReturnType<typeof setInterval> | null = null;
 
-	constructor(private readonly registry: SysopRegistry) {}
+	constructor(private readonly registry: DoeRegistry) {}
 
 	open(ctx: ExtensionContext) {
 		if (!ctx.hasUI || this.opened) return;

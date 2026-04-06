@@ -2,11 +2,11 @@ import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import type { SysopRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../state/registry.js";
 
 export function registerCancelTool(
 	pi: ExtensionAPI,
-	deps: { registry: SysopRegistry; client: CodexAppServerClient },
+	deps: { registry: DoeRegistry; client: CodexAppServerClient },
 ) {
 	pi.registerTool({
 		name: "codex_cancel",
@@ -33,7 +33,7 @@ export function registerCancelTool(
 			if (agent.activeTurnId) {
 				await deps.client.interruptTurn(agent.threadId, agent.activeTurnId);
 			}
-			deps.registry.markAwaitingInput(agent.threadId, "Interrupted by sysop.");
+			deps.registry.markAwaitingInput(agent.threadId, "Interrupted by Director of Engineering.");
 			return {
 				content: [{ type: "text", text: `Interrupted ${agent.name} (${agent.id}).` }],
 				details: { agent: deps.registry.getAgent(agent.id) },

@@ -4,7 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { extractThreadMessages, extractTurnMessages, truncateForDisplay } from "../codex/client.js";
-import type { SysopRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../state/registry.js";
 
 const HistorySchema = StringEnum(["summary", "first_last", "transcript", "full", "raw"] as const);
 const MESSAGE_BLOCK_MAX_CHARS = 4_000;
@@ -31,7 +31,7 @@ function renderTranscript(thread: any): string {
 
 export function registerInspectTool(
 	pi: ExtensionAPI,
-	deps: { registry: SysopRegistry; client: CodexAppServerClient },
+	deps: { registry: DoeRegistry; client: CodexAppServerClient },
 ) {
 	const recentActiveInspects = new Map<string, number>();
 

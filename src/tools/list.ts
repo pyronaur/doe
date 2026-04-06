@@ -2,16 +2,16 @@ import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { SysopRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../state/registry.js";
 import { truncateForDisplay } from "../codex/client.js";
 
 const StateSchema = StringEnum(["working", "completed", "error", "awaiting_input"] as const);
 
-export function registerListTool(pi: ExtensionAPI, deps: { registry: SysopRegistry }) {
+export function registerListTool(pi: ExtensionAPI, deps: { registry: DoeRegistry }) {
 	pi.registerTool({
 		name: "codex_list",
 		label: "Codex List",
-		description: "List active and recent Codex workstreams known to sysop.",
+		description: "List active and recent Codex workstreams known to the Director of Engineering.",
 		promptSnippet: "List active or recent Codex workstreams before choosing a thread to resume.",
 		parameters: Type.Object({
 			state: Type.Optional(StateSchema),
