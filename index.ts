@@ -16,7 +16,7 @@ import { dispatchPlannotatorRequest } from "./src/plan/plannotator-request.js";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./src/plan/reminder.js";
 import { DoeRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
 import { AgentLiveViewController } from "./src/ui/agent-live-view.js";
-import { formatOccupiedWidget } from "./src/ui/occupied-widget.js";
+import { formatDoeStatus } from "./src/ui/doe-status.js";
 import { loadMarkdownDoc, loadMarkdownDocs, summarizeTemplates } from "./src/templates/loader.js";
 import { registerPlanStartTool } from "./src/tools/plan-start.js";
 import { registerPlanResumeTool } from "./src/tools/plan-resume.js";
@@ -342,10 +342,8 @@ export default function doeExtension(pi: ExtensionAPI) {
 
 	function updateUi(ctx: ExtensionContext) {
 		if (!runtime || !ctx.hasUI) return;
-		const active = runtime.registry.listRosterAssignments().length;
-		ctx.ui.setStatus("doe", ctx.ui.theme.fg("accent", `🧭 DoE ${active} active IC${active === 1 ? "" : "s"}`));
-		const widget = formatOccupiedWidget(runtime.registry, DOE_MONITOR_SHORTCUT);
-		ctx.ui.setWidget("doe-active", widget.length > 0 ? widget : undefined, { placement: "aboveEditor" });
+		ctx.ui.setStatus("doe", ctx.ui.theme.fg("accent", formatDoeStatus(runtime.registry)));
+		ctx.ui.setWidget("doe-active", undefined, { placement: "aboveEditor" });
 		runtime.liveView.requestRender();
 	}
 
