@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { extractThreadTranscript, truncateForDisplay } from "../codex/client.js";
+import { formatUsageBreakdown, formatUsageCompact } from "../context-usage.js";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import type { AgentRecord, DoeRegistry } from "../state/registry.js";
 
@@ -85,7 +86,7 @@ function detailViewportSize(): number {
 
 function agentMeta(agent: AgentRecord): string {
 	const state = agent.activityLabel ?? agent.state;
-	return `${state} | ${agent.model} | ${formatElapsed(agent.startedAt, agent.completedAt)}`;
+	return `${state} | ${agent.model} | ${formatElapsed(agent.startedAt, agent.completedAt)} | ${formatUsageCompact(agent.usage)}`;
 }
 
 function sectionLabel(agent: AgentRecord): string {
@@ -392,6 +393,9 @@ class AgentLiveViewComponent {
 		body.push(` ${agent.activityLabel ?? agent.state} | ${agent.model} | ${agent.allowWrite ? "write" : "read-only"}`);
 		body.push(` cwd: ${truncateForDisplay(agent.cwd, inner - 6)}`);
 		body.push(` started: ${formatTimestamp(agent.startedAt)} | completed: ${formatTimestamp(agent.completedAt ?? null)}`);
+		for (const line of formatUsageBreakdown(agent.usage)) {
+			body.push(` ${truncateForDisplay(line, inner - 4)}`);
+		}
 		body.push(this.theme.fg("muted", " Esc/Left back | Up/Down scroll"));
 		body.push(this.theme.fg("border", "─".repeat(Math.max(0, inner - 1))));
 

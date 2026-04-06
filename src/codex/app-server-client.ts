@@ -11,6 +11,7 @@ import {
 	type TurnStartOptions,
 	type TurnSteerOptions,
 } from "./client.js";
+import type { ThreadTokenUsage, TokenUsageBreakdown } from "../context-usage.js";
 
 interface PendingRequest {
 	resolve: (value: any) => void;
@@ -37,6 +38,32 @@ function activityFromItem(item: any, event: "started" | "completed"): AgentActiv
 		default:
 			return null;
 	}
+}
+
+function normalizeNumber(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeBreakdown(value: any): TokenUsageBreakdown {
+	return {
+		totalTokens: normalizeNumber(value?.totalTokens),
+		inputTokens: normalizeNumber(value?.inputTokens),
+		cachedInputTokens: normalizeNumber(value?.cachedInputTokens),
+		outputTokens: normalizeNumber(value?.outputTokens),
+		reasoningOutputTokens: normalizeNumber(value?.reasoningOutputTokens),
+	};
+}
+
+function normalizeThreadTokenUsage(value: any): ThreadTokenUsage | null {
+	if (!value || typeof value !== "object") return null;
+	const window = typeof value.modelContextWindow === "number" && Number.isFinite(value.modelContextWindow)
+		? value.modelContextWindow
+		: null;
+	return {
+		total: normalizeBreakdown(value.total),
+		last: normalizeBreakdown(value.last),
+		modelContextWindow: window,
+	};
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -303,6 +330,17 @@ export class CodexAppServerClient extends EventEmitter {
 					status: params.status,
 				} satisfies CodexClientEvent);
 				return;
+			case "thread/tokenUsage/updated": {
+				const tokenUsage = normalizeThreadTokenUsage(params.tokenUsage);
+				if (!tokenUsage) return;
+				this.emit("event", {
+					type: "thread-token-usage",
+					threadId: params.threadId,
+					turnId: typeof params.turnId === "string" ? params.turnId : null,
+					tokenUsage,
+				} satisfies CodexClientEvent);
+				return;
+			}
 			case "turn/started":
 				this.emit("event", {
 					type: "turn-started",

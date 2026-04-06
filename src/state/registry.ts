@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { AgentActivity } from "../codex/client.js";
+import { deriveUsageSnapshot, type AgentUsageSnapshot, type ThreadTokenUsage } from "../context-usage.js";
 
 export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_input";
 export type NotificationMode = "wait_all" | "notify_each";
@@ -30,6 +31,7 @@ export interface AgentRecord {
 	latestSnippet: string;
 	latestFinalOutput?: string | null;
 	lastError?: string | null;
+	usage?: AgentUsageSnapshot | null;
 	startedAt: number;
 	completedAt?: number | null;
 	parentBatchId?: string | null;
@@ -112,6 +114,11 @@ function cloneAgent(agent: AgentRecord): AgentRecord {
 	return {
 		...agent,
 		messages: (agent.messages ?? []).map(cloneMessage),
+		usage: agent.usage ? {
+			...agent.usage,
+			total: { ...agent.usage.total },
+			last: { ...agent.usage.last },
+		} : null,
 		historyHydratedAt: agent.historyHydratedAt ?? null,
 	};
 }
@@ -301,6 +308,13 @@ export class DoeRegistry extends EventEmitter {
 		this.updateAgentByThread(threadId, (agent) => ({
 			...agent,
 			latestSnippet: tailSnippet(`${agent.latestSnippet}${delta}`),
+		}));
+	}
+
+	markTokenUsage(threadId: string, turnId: string | null, tokenUsage: ThreadTokenUsage) {
+		this.updateAgentByThread(threadId, (agent) => ({
+			...agent,
+			usage: deriveUsageSnapshot(tokenUsage, turnId),
 		}));
 	}
 

@@ -4,6 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { extractLastCompletedAgentMessage, truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
+import { formatUsageCompact } from "../context-usage.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
@@ -79,7 +80,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 		},
 		renderResult(result, _options, theme) {
 			const agent = (result as any).details?.agent;
-			const preview = truncateForDisplay(agent?.latestFinalOutput ?? agent?.latestSnippet ?? result.content?.[0]?.text ?? "Resumed", 240);
+			const preview = truncateForDisplay(`${formatUsageCompact(agent?.usage)} ${agent?.latestFinalOutput ?? agent?.latestSnippet ?? result.content?.[0]?.text ?? "Resumed"}`, 240);
 			return new Text(theme.fg("accent", preview), 0, 0);
 		},
 		async execute(_toolCallId, params, signal) {
@@ -161,7 +162,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				text = extractLastCompletedAgentMessage(threadResponse.thread);
 			}
 			return {
-				content: [{ type: "text", text: text ?? "Completed" }],
+				content: [{ type: "text", text: [`name: ${finalAgent.name}`, `state: ${finalAgent.state}`, `context: ${formatUsageCompact(finalAgent.usage)}`, "", text ?? "Completed"].join("\n") }],
 				details: { agent: finalAgent },
 			};
 		},

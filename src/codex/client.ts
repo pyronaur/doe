@@ -1,3 +1,5 @@
+import type { ThreadTokenUsage } from "../context-usage.js";
+
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type ApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 
@@ -91,6 +93,7 @@ export interface TurnSteerOptions {
 export type CodexClientEvent =
 	| { type: "thread-started"; thread: ThreadSummary }
 	| { type: "thread-status"; threadId: string; status: { type?: string; activeFlags?: string[] } }
+	| { type: "thread-token-usage"; threadId: string; turnId: string | null; tokenUsage: ThreadTokenUsage }
 	| { type: "turn-started"; threadId: string; turnId: string }
 	| { type: "turn-completed"; threadId: string; turnId: string; status: string; error?: string | null }
 	| { type: "agent-message-delta"; threadId: string; turnId: string; itemId: string; delta: string }

@@ -6,6 +6,7 @@ import { validateModelId } from "./src/codex/model-selection.js";
 import type { CodexClientEvent } from "./src/codex/client.js";
 import { DoeRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
 import { AgentLiveViewController, formatElapsed } from "./src/ui/agent-live-view.js";
+import { formatUsageCompact } from "./src/context-usage.js";
 import { loadMarkdownDoc, loadMarkdownDocs, summarizeTemplates } from "./src/templates/loader.js";
 import { registerSpawnTool } from "./src/tools/spawn.js";
 import { registerResumeTool } from "./src/tools/resume.js";
@@ -34,7 +35,7 @@ function formatActiveWidget(registry: DoeRegistry): string[] {
 	return [
 		`DoE Active Agents (${agents.length})`,
 		"Currently running workstreams:",
-		...agents.map((agent, index) => `${index + 1}. ${agent.name} | ${agent.activityLabel ?? agent.state} | ${formatElapsed(agent.startedAt, agent.completedAt)}`),
+		...agents.map((agent, index) => `${index + 1}. ${agent.name} | ${agent.activityLabel ?? agent.state} | ${formatElapsed(agent.startedAt, agent.completedAt)} | ${formatUsageCompact(agent.usage)}`),
 		`${DOE_MONITOR_SHORTCUT} monitor`,
 	];
 }
@@ -209,6 +210,9 @@ export default function doeExtension(pi: ExtensionAPI) {
 		switch (event.type) {
 			case "thread-status":
 				runtime.registry.markThreadStatus(event.threadId, event.status);
+				break;
+			case "thread-token-usage":
+				runtime.registry.markTokenUsage(event.threadId, event.turnId, event.tokenUsage);
 				break;
 			case "turn-started":
 				runtime.registry.markTurnStarted(event.threadId, event.turnId);
