@@ -15,7 +15,7 @@ import {
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./src/plan/reminder.js";
 import { DoeRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
 import { AgentLiveViewController } from "./src/ui/agent-live-view.js";
-import { formatAgentProgressLine } from "./src/ui/agent-progress.js";
+import { formatOccupiedWidget } from "./src/ui/occupied-widget.js";
 import { loadMarkdownDoc, loadMarkdownDocs, summarizeTemplates } from "./src/templates/loader.js";
 import { registerPlanStartTool } from "./src/tools/plan-start.js";
 import { registerPlanResumeTool } from "./src/tools/plan-resume.js";
@@ -53,20 +53,6 @@ async function refreshThreadUsage(runtime: DoeRuntime, threadId: string, turnId:
 		if (!usage) return;
 		runtime.registry.markTokenUsage(threadId, turnId, usage);
 	} catch {}
-}
-
-function formatActiveWidget(registry: DoeRegistry): string[] {
-	const roster = registry.listRosterAssignments();
-	if (roster.length === 0) return [];
-	const summaries = registry.getRosterBucketSummaries();
-	return [
-		`DoE Occupied Roster (${roster.length})`,
-		...summaries
-			.filter((entry) => entry.activeCount > 0)
-			.map((entry) => `${entry.label}: ${entry.names.join(", ")}`),
-		...roster.map(({ agent }, index) => `${index + 1}. ${formatAgentProgressLine(agent)}`),
-		`${DOE_MONITOR_SHORTCUT} monitor`,
-	];
 }
 
 function primaryActiveAgent(registry: DoeRegistry) {
@@ -343,7 +329,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 		if (!runtime || !ctx.hasUI) return;
 		const active = runtime.registry.listRosterAssignments().length;
 		ctx.ui.setStatus("doe", ctx.ui.theme.fg("accent", `🧭 DoE ${active} active IC${active === 1 ? "" : "s"}`));
-		const widget = formatActiveWidget(runtime.registry);
+		const widget = formatOccupiedWidget(runtime.registry, DOE_MONITOR_SHORTCUT);
 		ctx.ui.setWidget("doe-active", widget.length > 0 ? widget : undefined, { placement: "aboveEditor" });
 		runtime.liveView.requestRender();
 	}
