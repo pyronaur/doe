@@ -7,14 +7,18 @@ import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
-import type { NotificationMode, DoeRegistry } from "../state/registry.js";
+import type { AssignableRosterBucket, NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
+import { normalizeSpawnSeatIntent } from "./spawn-seat-intent.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
+const BucketSchema = StringEnum(["senior", "mid", "research"] as const);
 
 const TaskSchema = Type.Object({
-	name: Type.String(),
+	name: Type.Optional(Type.String()),
+	ic: Type.Optional(Type.String()),
+	bucket: Type.Optional(BucketSchema),
 	prompt: Type.String(),
 	cwd: Type.Optional(Type.String()),
 	model: Type.Optional(Type.String()),
@@ -29,6 +33,8 @@ const TaskSchema = Type.Object({
 const SpawnParametersSchema = Type.Object({
 	tasks: Type.Optional(Type.Array(TaskSchema, { minItems: 1, maxItems: 8 })),
 	name: Type.Optional(Type.String()),
+	ic: Type.Optional(Type.String()),
+	bucket: Type.Optional(BucketSchema),
 	prompt: Type.Optional(Type.String()),
 	cwd: Type.Optional(Type.String()),
 	model: Type.Optional(Type.String()),
@@ -70,7 +76,7 @@ function buildPrompt(
 	if (!doc) {
 		throw new Error(`Unknown template "${task.template}". Available: ${docs.map((entry) => entry.name).join(", ") || "none"}`);
 	}
-	const defaultModel = readOptionalModelId(doc.attributes.default_model, `template \"${doc.name}\" default_model`);
+	const defaultModel = readOptionalModelId(doc.attributes.default_model, `template "${doc.name}" default_model`);
 	const defaultEffort = doc.attributes.default_effort;
 	if (defaultEffort !== "low" && defaultEffort !== "medium" && defaultEffort !== "high" && defaultEffort !== "xhigh") {
 		throw new Error(`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`);
@@ -102,6 +108,8 @@ function buildTasks(params: any): any[] {
 	return [
 		{
 			name: params.name ?? inferName(params.prompt),
+			ic: params.ic,
+			bucket: params.bucket,
 			prompt: params.prompt,
 			cwd: params.cwd,
 			model: params.model,
@@ -143,7 +151,7 @@ function resolveAgentFinalOutput(agent: any): string {
 
 function formatBatchOutputs(agents: Array<any>): string {
 	return agents
-		.map((agent, index) => [`## ${index + 1}. ${agent.name}`, `state: ${agent.state}`, `context: ${formatUsageCompact(agent.usage)}`, ...(formatCompactionSignal(agent.compaction) ? [`context_status: ${formatCompactionSignal(agent.compaction)}`] : []), "", resolveAgentFinalOutput(agent)].join("\n"))
+		.map((agent, index) => [`## ${index + 1}. ${agent.name}`, `ic: ${agent.name}`, `state: ${agent.state}`, `context: ${formatUsageCompact(agent.usage)}`, ...(formatCompactionSignal(agent.compaction) ? [`context_status: ${formatCompactionSignal(agent.compaction)}`] : []), "", resolveAgentFinalOutput(agent)].join("\n"))
 		.join("\n\n---\n\n");
 }
 
@@ -158,7 +166,14 @@ async function executeSpawnLike(
 	onUpdate: ((update: any) => void) | undefined,
 	deps: SpawnToolDeps,
 ) {
-	const tasks = buildTasks(params);
+	const tasks = buildTasks(params).map((task) => {
+		const seatIntent = normalizeSpawnSeatIntent(task, (name) => Boolean(deps.registry.findSeat(name)));
+		return {
+			...task,
+			name: seatIntent.taskName,
+			ic: seatIntent.ic,
+		};
+	});
 	const batchId = tasks.length > 1 ? randomUUID() : null;
 	const notificationMode = (batchId ? "wait_all" : "notify_each") as NotificationMode;
 	const returnMode = "wait" as const;
@@ -182,17 +197,22 @@ async function executeSpawnLike(
 		const cwd = rawTask.cwd ?? process.cwd();
 		const approvalPolicy = (rawTask.approvalPolicy ?? "never") as ApprovalPolicy;
 		const networkAccess = rawTask.networkAccess ?? false;
-		const name = rawTask.name?.trim() || inferName(rawTask.prompt);
+		const taskName = rawTask.name?.trim() || inferName(rawTask.prompt);
 		const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir);
 		const explicitModel = readOptionalModelId(rawTask.model, "model");
 		const model = validateModelId(explicitModel ?? templateDefaultModel ?? "gpt-5.4-mini", explicitModel ? "model" : "resolved model");
 		const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
 		const allowWrite = inferAllowWrite(rawTask, templateName);
 		const agentId = seededAgentIds[index - 1]!;
+		const seat = deps.registry.assignSeat({
+			agentId,
+			ic: rawTask.ic ?? null,
+			bucket: (rawTask.bucket ?? "mid") as AssignableRosterBucket,
+		});
 
 		deps.registry.upsertAgent({
 			id: agentId,
-			name,
+			name: seat.name,
 			cwd,
 			model,
 			effort,
@@ -214,37 +234,47 @@ async function executeSpawnLike(
 			returnMode,
 			completionNotified: false,
 			recovered: false,
+			seatName: seat.name,
+			seatBucket: seat.bucket,
+			seatKind: seat.kind,
+			finishNote: null,
+			reuseSummary: null,
 			messages: [],
 			historyHydratedAt: null,
 		});
 
 		onUpdate?.({
-			content: [{ type: "text", text: `Launching ${name} (${index}/${tasks.length})` }],
-			details: { index, total: tasks.length, agentId, name, allowWrite },
+			content: [{ type: "text", text: `Launching ${seat.name} (${index}/${tasks.length}) for ${taskName}` }],
+			details: { index, total: tasks.length, agentId, ic: seat.name, allowWrite },
 		});
 
-		const thread = await deps.client.startThread({
-			model,
-			cwd,
-			approvalPolicy,
-			networkAccess,
-			allowWrite,
-		});
-		deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id });
+		try {
+			const thread = await deps.client.startThread({
+				model,
+				cwd,
+				approvalPolicy,
+				networkAccess,
+				allowWrite,
+			});
+			deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id });
 
-		const turn = await deps.client.startTurn({
-			threadId: thread.thread.id,
-			prompt,
-			cwd,
-			model,
-			effort,
-			approvalPolicy,
-			networkAccess,
-			allowWrite,
-		});
-		deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id, activeTurnId: turn.turn.id });
-		deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
-		deps.registry.appendUserMessage(agentId, turn.turn.id, prompt);
+			const turn = await deps.client.startTurn({
+				threadId: thread.thread.id,
+				prompt,
+				cwd,
+				model,
+				effort,
+				approvalPolicy,
+				networkAccess,
+				allowWrite,
+			});
+			deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id, activeTurnId: turn.turn.id });
+			deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
+			deps.registry.appendUserMessage(agentId, turn.turn.id, prompt);
+		} catch (error) {
+			deps.registry.markAgentError(agentId, error instanceof Error ? error.message : String(error));
+			throw error;
+		}
 	}
 
 	const finalAgents = batchId
@@ -252,7 +282,7 @@ async function executeSpawnLike(
 		: [await deps.registry.waitForAgent(agentIds[0]!, signal)];
 	const text = batchId
 		? formatBatchOutputs(finalAgents)
-		: [`name: ${finalAgents[0].name}`, `state: ${finalAgents[0].state}`, `context: ${formatUsageCompact(finalAgents[0].usage)}`, ...(formatCompactionSignal(finalAgents[0].compaction) ? [`context_status: ${formatCompactionSignal(finalAgents[0].compaction)}`] : []), "", resolveAgentFinalOutput(finalAgents[0])].join("\n");
+		: [`ic: ${finalAgents[0].name}`, `state: ${finalAgents[0].state}`, `context: ${formatUsageCompact(finalAgents[0].usage)}`, ...(formatCompactionSignal(finalAgents[0].compaction) ? [`context_status: ${formatCompactionSignal(finalAgents[0].compaction)}`] : []), "", resolveAgentFinalOutput(finalAgents[0])].join("\n");
 	return {
 		content: [{ type: "text", text }],
 		details: {
@@ -267,11 +297,15 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 	pi.registerTool({
 		name: "codex_spawn",
 		label: "Codex Spawn",
-		description: "Spawn one or more Codex workstreams. Each task gets its own thread. Tasks in tasks[] run as a batch.",
+		description: "Spawn one or more named IC assignments. Each task gets its own thread and seat.",
 		promptSnippet: "Spawn new Codex workers for scanning, research, planning, or implementation. Use tasks[] for parallel independent work.",
 		promptGuidelines: [
 			"Use for new work only. Do not use when an existing thread has relevant context — use codex_resume instead.",
-			"Pass multiple tasks in tasks[] when the questions are independent. Each task gets its own thread.",
+			"Use name for the task label. Use ic for seat targeting.",
+			"Fresh spawn on the same seat starts a new thread and does not preserve thread memory. Use codex_resume when the same thread context should continue.",
+			"Pass ic to target a specific named seat, or bucket to auto-allocate the next free seat in senior|mid|research.",
+			"Compatibility shim: if name exactly matches an existing seat and ic is omitted, DOE treats that name as the intended seat.",
+			"Each new task gets a fresh assignment. If the bucket is full, DOE allocates contractor-N overflow seats.",
 			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
 			"Workers are read-only by default. Set allowWrite=true per task, or use template=implement which enables write automatically.",
 			"Waits for workers to complete and returns each worker's full final answer in content. Use that returned content directly as the worker result.",
