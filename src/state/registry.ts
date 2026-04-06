@@ -7,9 +7,12 @@ import {
 	type AgentUsageSnapshot,
 } from "../context-usage.js";
 
-export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_input";
+export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_input" | "finalized";
 export type NotificationMode = "wait_all" | "notify_each";
 export type ReturnMode = "wait";
+export type RosterBucket = "senior" | "mid" | "research" | "contractor";
+export type AssignableRosterBucket = Exclude<RosterBucket, "contractor">;
+export type SeatKind = "named" | "contractor";
 
 export interface AgentMessageRecord {
 	turnId: string;
@@ -45,6 +48,11 @@ export interface AgentRecord {
 	returnMode: ReturnMode;
 	completionNotified?: boolean;
 	recovered?: boolean;
+	seatName?: string | null;
+	seatBucket?: RosterBucket | null;
+	seatKind?: SeatKind | null;
+	finishNote?: string | null;
+	reuseSummary?: string | null;
 	messages: AgentMessageRecord[];
 	historyHydratedAt?: number | null;
 }
@@ -60,11 +68,42 @@ export interface BatchRecord {
 	notified?: boolean;
 }
 
+export interface RosterSeatRecord {
+	name: string;
+	bucket: RosterBucket;
+	kind: SeatKind;
+	order: number;
+	activeAgentId?: string | null;
+	lastFinishedAgentId?: string | null;
+	lastThreadId?: string | null;
+	lastFinishNote?: string | null;
+	lastReuseSummary?: string | null;
+}
+
+export interface PersistedRosterSnapshot {
+	seats: RosterSeatRecord[];
+	nextContractorNumber: number;
+}
+
 export interface PersistedRegistrySnapshot {
 	version: number;
 	savedAt: number;
 	agents: AgentRecord[];
 	batches: BatchRecord[];
+	roster?: PersistedRosterSnapshot | null;
+}
+
+export interface RosterAssignmentRecord {
+	seat: RosterSeatRecord;
+	agent: AgentRecord;
+	source: "active" | "history";
+}
+
+export interface RosterBucketSummary {
+	bucket: RosterBucket;
+	label: string;
+	activeCount: number;
+	names: string[];
 }
 
 export type RegistryEvent =
@@ -73,7 +112,29 @@ export type RegistryEvent =
 	| { type: "agent-terminal"; agent: AgentRecord }
 	| { type: "batch-completed"; batch: BatchRecord; agents: AgentRecord[] };
 
-const TERMINAL_STATES = new Set<AgentLifecycleState>(["completed", "error", "awaiting_input"]);
+export const ROSTER_BUCKET_ORDER = ["senior", "mid", "research", "contractor"] as const;
+export const ROSTER_BUCKET_LABELS: Record<RosterBucket, string> = {
+	senior: "Senior Engineers",
+	mid: "Mid-level Engineers",
+	research: "Researchers/Assistants",
+	contractor: "Contractors",
+};
+
+const TERMINAL_STATES = new Set<AgentLifecycleState>(["completed", "error", "awaiting_input", "finalized"]);
+const ATTACHED_STATES = new Set<AgentLifecycleState>(["working", "awaiting_input", "completed"]);
+const RECOVERABLE_STATES = new Set<AgentLifecycleState>(["working", "awaiting_input"]);
+const CONTRACTOR_NAME = /^contractor-(\d+)$/i;
+const FIXED_SEATS: Array<{ name: string; bucket: AssignableRosterBucket; order: number }> = [
+	{ name: "Tony", bucket: "senior", order: 1 },
+	{ name: "Bruce", bucket: "senior", order: 2 },
+	{ name: "Strange", bucket: "senior", order: 3 },
+	{ name: "Peter", bucket: "mid", order: 1 },
+	{ name: "Sam", bucket: "mid", order: 2 },
+	{ name: "Hope", bucket: "research", order: 1 },
+	{ name: "Scott", bucket: "research", order: 2 },
+	{ name: "Jane", bucket: "research", order: 3 },
+	{ name: "Pepper", bucket: "research", order: 4 },
+];
 
 function normalizeErrorText(text: string): string {
 	const trimmed = text.trim();
@@ -86,6 +147,49 @@ function normalizeErrorText(text: string): string {
 		}
 	} catch {}
 	return text;
+}
+
+function normalizeSeatName(name: string): string {
+	return name.trim().toLowerCase();
+}
+
+function contractorNumber(name: string): number | null {
+	const match = name.match(CONTRACTOR_NAME);
+	if (!match) return null;
+	const parsed = Number.parseInt(match[1] ?? "", 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function defaultSeatRecord(input: { name: string; bucket: RosterBucket; kind: SeatKind; order: number }): RosterSeatRecord {
+	return {
+		name: input.name,
+		bucket: input.bucket,
+		kind: input.kind,
+		order: input.order,
+		activeAgentId: null,
+		lastFinishedAgentId: null,
+		lastThreadId: null,
+		lastFinishNote: null,
+		lastReuseSummary: null,
+	};
+}
+
+function cloneSeat(seat: RosterSeatRecord): RosterSeatRecord {
+	return {
+		...seat,
+		activeAgentId: seat.activeAgentId ?? null,
+		lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
+		lastThreadId: seat.lastThreadId ?? null,
+		lastFinishNote: seat.lastFinishNote ?? null,
+		lastReuseSummary: seat.lastReuseSummary ?? null,
+	};
+}
+
+function seatSort(a: RosterSeatRecord, b: RosterSeatRecord): number {
+	const bucketDiff = ROSTER_BUCKET_ORDER.indexOf(a.bucket) - ROSTER_BUCKET_ORDER.indexOf(b.bucket);
+	if (bucketDiff !== 0) return bucketDiff;
+	if (a.order !== b.order) return a.order - b.order;
+	return a.name.localeCompare(b.name);
 }
 
 function tailSnippet(text: string, maxChars = 1800, maxLines = 12): string {
@@ -127,6 +231,11 @@ function cloneAgent(agent: AgentRecord): AgentRecord {
 		} : null,
 		compaction: agent.compaction ? { ...agent.compaction } : null,
 		historyHydratedAt: agent.historyHydratedAt ?? null,
+		seatName: agent.seatName ?? null,
+		seatBucket: agent.seatBucket ?? null,
+		seatKind: agent.seatKind ?? null,
+		finishNote: agent.finishNote ?? null,
+		reuseSummary: agent.reuseSummary ?? null,
 	};
 }
 
@@ -148,6 +257,43 @@ function sameLogicalMessage(a: AgentMessageRecord, b: AgentMessageRecord): boole
 	if (a.role === "user") return true;
 	if (!a.text || !b.text) return false;
 	return a.text === b.text || a.text.startsWith(b.text) || b.text.startsWith(a.text);
+}
+
+function latestAgentSummary(messages: AgentMessageRecord[]): { latestSnippet: string; latestFinalOutput: string | null } | null {
+	const lastAgentMessage = [...messages].reverse().find((message) => message.role === "agent" && message.text.trim().length > 0);
+	if (!lastAgentMessage) return null;
+	return {
+		latestSnippet: tailSnippet(lastAgentMessage.text),
+		latestFinalOutput: lastAgentMessage.streaming ? null : lastAgentMessage.text,
+	};
+}
+
+function isAttachedState(state: AgentLifecycleState): boolean {
+	return ATTACHED_STATES.has(state);
+}
+
+function isRecoverableState(state: AgentLifecycleState): boolean {
+	return RECOVERABLE_STATES.has(state);
+}
+
+function normalizeAgentRecord(agent: AgentRecord): AgentRecord {
+	return {
+		...cloneAgent(agent),
+		returnMode: "wait",
+		activityLabel:
+			agent.activityLabel ??
+			(agent.state === "completed"
+				? "completed"
+				: agent.state === "error"
+					? "error"
+					: agent.state === "awaiting_input"
+						? "awaiting input"
+						: agent.state === "finalized"
+							? "completed"
+							: "thinking"),
+		recovered: true,
+		compaction: agent.compaction ? createCompactionState(agent.compaction) : null,
+	};
 }
 
 export function mergeHydratedMessages(current: AgentMessageRecord[], hydrated: AgentMessageRecord[]): AgentMessageRecord[] {
@@ -182,20 +328,18 @@ export function mergeHydratedMessages(current: AgentMessageRecord[], hydrated: A
 	return [...mergedHistory, ...live];
 }
 
-function latestAgentSummary(messages: AgentMessageRecord[]): { latestSnippet: string; latestFinalOutput: string | null } | null {
-	const lastAgentMessage = [...messages].reverse().find((message) => message.role === "agent" && message.text.trim().length > 0);
-	if (!lastAgentMessage) return null;
-	return {
-		latestSnippet: tailSnippet(lastAgentMessage.text),
-		latestFinalOutput: lastAgentMessage.streaming ? null : lastAgentMessage.text,
-	};
-}
-
 export class DoeRegistry extends EventEmitter {
 	private readonly agents = new Map<string, AgentRecord>();
 	private readonly batches = new Map<string, BatchRecord>();
+	private readonly seats = new Map<string, RosterSeatRecord>();
 	private readonly agentWaiters = new Map<string, Array<(agent: AgentRecord) => void>>();
 	private readonly batchWaiters = new Map<string, Array<(agents: AgentRecord[]) => void>>();
+	private nextContractorNumber = 1;
+
+	constructor() {
+		super();
+		this.resetRoster();
+	}
 
 	createBatch(input: {
 		id: string;
@@ -219,10 +363,24 @@ export class DoeRegistry extends EventEmitter {
 		return batch;
 	}
 
+	assignSeat(input: { agentId: string; ic?: string | null; bucket?: AssignableRosterBucket | null }): RosterSeatRecord {
+		const seat = input.ic?.trim()
+			? this.requireSeatForAssignment(input.ic)
+			: this.allocateSeat(input.bucket ?? "mid");
+		if (seat.activeAgentId && seat.activeAgentId !== input.agentId) {
+			throw new Error(`${seat.name} already has an active assignment.`);
+		}
+		const next = { ...seat, activeAgentId: input.agentId };
+		this.seats.set(normalizeSeatName(next.name), next);
+		this.emitChange();
+		return cloneSeat(next);
+	}
+
 	upsertAgent(agent: AgentRecord): AgentRecord {
 		const previous = this.agents.get(agent.id);
 		const next = cloneAgent(agent);
 		this.agents.set(agent.id, next);
+		this.syncSeatLinks(previous, next);
 		const current = this.getAgent(agent.id)!;
 		this.emit("event", { type: "agent-updated", agent: current } satisfies RegistryEvent);
 		if (current.state !== previous?.state && TERMINAL_STATES.has(current.state)) {
@@ -245,7 +403,26 @@ export class DoeRegistry extends EventEmitter {
 		return undefined;
 	}
 
+	findSeat(name: string): RosterSeatRecord | undefined {
+		const seat = this.seats.get(normalizeSeatName(name));
+		return seat ? cloneSeat(seat) : undefined;
+	}
+
+	findActiveSeatAgent(name: string): AgentRecord | undefined {
+		const seat = this.seats.get(normalizeSeatName(name));
+		if (!seat?.activeAgentId) return undefined;
+		return this.getAgent(seat.activeAgentId);
+	}
+
+	findLastFinishedSeatAgent(name: string): AgentRecord | undefined {
+		const seat = this.seats.get(normalizeSeatName(name));
+		if (!seat?.lastFinishedAgentId) return undefined;
+		return this.getAgent(seat.lastFinishedAgentId);
+	}
+
 	findAgent(identifier: string): AgentRecord | undefined {
+		const seatMatch = this.findActiveSeatAgent(identifier) ?? this.findLastFinishedSeatAgent(identifier);
+		if (seatMatch) return seatMatch;
 		const exact = this.getAgent(identifier) ?? this.getAgentByThreadId(identifier);
 		if (exact) return exact;
 		const normalized = identifier.trim().toLowerCase();
@@ -273,10 +450,93 @@ export class DoeRegistry extends EventEmitter {
 		return agents.map(cloneAgent);
 	}
 
+	listRecoverableAgents(): AgentRecord[] {
+		return this.listAgents({ includeCompleted: true }).filter((agent) => agent.threadId && isRecoverableState(agent.state));
+	}
+
 	listBatches(limit?: number): BatchRecord[] {
 		let batches = [...this.batches.values()].sort((a, b) => b.startedAt - a.startedAt);
 		if (typeof limit === "number") batches = batches.slice(0, limit);
 		return batches.map((batch) => ({ ...batch, agentIds: [...batch.agentIds] }));
+	}
+
+	listRosterSeats(): RosterSeatRecord[] {
+		return [...this.seats.values()].sort(seatSort).map(cloneSeat);
+	}
+
+	listRosterAssignments(options: { includeAwaitingInput?: boolean; includeHistory?: boolean; limit?: number } = {}): RosterAssignmentRecord[] {
+		const { includeAwaitingInput = false, includeHistory = false, limit } = options;
+		const entries: RosterAssignmentRecord[] = [];
+		for (const seat of this.listRosterSeats()) {
+			const active = seat.activeAgentId ? this.getAgent(seat.activeAgentId) : undefined;
+			if (active?.state === "working") {
+				entries.push({ seat, agent: active, source: "active" });
+				continue;
+			}
+			if (includeAwaitingInput && active?.state === "awaiting_input") {
+				entries.push({ seat, agent: active, source: "active" });
+				continue;
+			}
+			if (includeHistory && active?.state === "completed") {
+				entries.push({ seat, agent: active, source: "active" });
+				continue;
+			}
+			if (includeHistory && seat.lastFinishedAgentId) {
+				const history = this.getAgent(seat.lastFinishedAgentId);
+				if (history) entries.push({ seat, agent: history, source: "history" });
+			}
+		}
+		return typeof limit === "number" ? entries.slice(0, limit) : entries;
+	}
+
+	getRosterBucketSummaries(options: { includeAwaitingInput?: boolean; includeHistory?: boolean } = {}): RosterBucketSummary[] {
+		const counts = new Map<RosterBucket, RosterBucketSummary>();
+		for (const bucket of ROSTER_BUCKET_ORDER) {
+			counts.set(bucket, { bucket, label: ROSTER_BUCKET_LABELS[bucket], activeCount: 0, names: [] });
+		}
+		for (const entry of this.listRosterAssignments({
+			includeAwaitingInput: options.includeAwaitingInput ?? false,
+			includeHistory: options.includeHistory ?? false,
+		})) {
+			const summary = counts.get(entry.seat.bucket)!;
+			summary.activeCount += 1;
+			summary.names.push(entry.seat.name);
+		}
+		return [...ROSTER_BUCKET_ORDER].map((bucket) => counts.get(bucket)!);
+	}
+
+	finalizeSeat(
+		ic: string,
+		input: { note?: string | null; reuseSummary?: string | null } = {},
+	): { seat: RosterSeatRecord; agent: AgentRecord } {
+		const seat = this.requireSeat(ic);
+		if (!seat.activeAgentId) {
+			throw new Error(`${seat.name} has no occupied assignment to finalize.`);
+		}
+		const agent = this.agents.get(seat.activeAgentId);
+		if (!agent) {
+			throw new Error(`${seat.name} is missing its active assignment record.`);
+		}
+		if (agent.state === "working") {
+			throw new Error(`${seat.name} is still working. Wait, resume, or cancel before finalizing.`);
+		}
+
+		const finalized = {
+			...cloneAgent(agent),
+			state: "finalized" as const,
+			activityLabel: "completed" as const,
+			activeTurnId: null,
+			completedAt: agent.completedAt ?? Date.now(),
+			finishNote: input.note ?? agent.finishNote ?? null,
+			reuseSummary: input.reuseSummary ?? agent.reuseSummary ?? null,
+			latestSnippet: input.note ? tailSnippet(input.note) : agent.latestSnippet,
+		};
+		this.releaseSeat(finalized, {
+			note: finalized.finishNote ?? null,
+			reuseSummary: finalized.reuseSummary ?? null,
+		});
+		const saved = this.upsertAgent(finalized);
+		return { seat: this.findSeat(seat.name)!, agent: saved };
 	}
 
 	markThreadAttached(agentId: string, details: { threadId: string; activeTurnId?: string | null; recovered?: boolean }) {
@@ -495,15 +755,16 @@ export class DoeRegistry extends EventEmitter {
 		this.updateAgentByThread(threadId, (agent) => {
 			const summary = latestAgentSummary(agent.messages);
 			const output = finalOutput ?? summary?.latestFinalOutput ?? agent.latestFinalOutput ?? agent.latestSnippet;
-			return {
+			const next = {
 				...agent,
-				state: "completed",
-				activityLabel: "completed",
+				state: "completed" as const,
+				activityLabel: "completed" as const,
 				completedAt: Date.now(),
 				activeTurnId: null,
 				latestFinalOutput: output,
 				latestSnippet: output ? tailSnippet(output) : agent.latestSnippet,
 			};
+			return next;
 		});
 	}
 
@@ -520,15 +781,34 @@ export class DoeRegistry extends EventEmitter {
 
 	markError(threadId: string, error: string) {
 		const normalizedError = normalizeErrorText(error);
-		this.updateAgentByThread(threadId, (agent) => ({
-			...agent,
-			state: "error",
-			activityLabel: "error",
-			completedAt: Date.now(),
-			activeTurnId: null,
-			lastError: normalizedError,
-			latestSnippet: tailSnippet(normalizedError),
-		}));
+		this.updateAgentByThread(threadId, (agent) => {
+			const next = {
+				...agent,
+				state: "error" as const,
+				activityLabel: "error" as const,
+				completedAt: Date.now(),
+				activeTurnId: null,
+				lastError: normalizedError,
+				latestSnippet: tailSnippet(normalizedError),
+			};
+			return next;
+		});
+	}
+
+	markAgentError(agentId: string, error: string) {
+		const normalizedError = normalizeErrorText(error);
+		this.updateAgent(agentId, (agent) => {
+			const next = {
+				...agent,
+				state: "error" as const,
+				activityLabel: "error" as const,
+				completedAt: Date.now(),
+				activeTurnId: null,
+				lastError: normalizedError,
+				latestSnippet: tailSnippet(normalizedError),
+			};
+			return next;
+		});
 	}
 
 	markCompletionNotified(agentId: string) {
@@ -555,7 +835,7 @@ export class DoeRegistry extends EventEmitter {
 				() => {
 					const currentAgent = this.agents.get(agentId);
 					if (currentAgent && TERMINAL_STATES.has(currentAgent.state)) {
-						resolve({ ...currentAgent });
+						resolve(cloneAgent(currentAgent));
 						return;
 					}
 					this.agentWaiters.set(
@@ -603,43 +883,259 @@ export class DoeRegistry extends EventEmitter {
 
 	serialize(): PersistedRegistrySnapshot {
 		return {
-			version: 3,
+			version: 4,
 			savedAt: Date.now(),
 			agents: this.listAgents(),
 			batches: this.listBatches(),
+			roster: {
+				seats: this.listRosterSeats(),
+				nextContractorNumber: this.nextContractorNumber,
+			},
 		};
 	}
 
 	restore(snapshot: PersistedRegistrySnapshot | null | undefined) {
 		this.agents.clear();
 		this.batches.clear();
+		this.resetRoster();
 		if (!snapshot) {
 			this.emitChange();
 			return;
 		}
 		for (const agent of snapshot.agents ?? []) {
-			this.agents.set(agent.id, {
-				...cloneAgent(agent),
-				returnMode: "wait",
-				activityLabel:
-					agent.activityLabel ??
-					(agent.state === "completed"
-						? "completed"
-						: agent.state === "error"
-							? "error"
-							: agent.state === "awaiting_input"
-								? "awaiting input"
-								: "thinking"),
-				recovered: true,
-				messages: (agent.messages ?? []).map(cloneMessage),
-				compaction: agent.compaction ? createCompactionState(agent.compaction) : null,
-				historyHydratedAt: agent.historyHydratedAt ?? null,
-			});
+			this.agents.set(agent.id, normalizeAgentRecord(agent));
 		}
 		for (const batch of snapshot.batches ?? []) {
 			this.batches.set(batch.id, { ...batch, returnMode: "wait", agentIds: [...batch.agentIds] });
 		}
+		if (snapshot.roster?.seats?.length) {
+			this.restoreRoster(snapshot.roster);
+		} else {
+			this.migrateLegacyRosterLinks();
+		}
+		this.normalizeRosterState();
 		this.emitChange();
+	}
+
+	private resetRoster() {
+		this.seats.clear();
+		for (const seat of FIXED_SEATS) {
+			this.seats.set(
+				normalizeSeatName(seat.name),
+				defaultSeatRecord({
+					name: seat.name,
+					bucket: seat.bucket,
+					kind: "named",
+					order: seat.order,
+				}),
+			);
+		}
+		this.nextContractorNumber = 1;
+	}
+
+	private restoreRoster(roster: PersistedRosterSnapshot) {
+		this.resetRoster();
+		for (const seat of roster.seats ?? []) {
+			const normalizedName = normalizeSeatName(seat.name);
+			const fixed = FIXED_SEATS.find((entry) => normalizeSeatName(entry.name) === normalizedName);
+			if (fixed) {
+				this.seats.set(normalizedName, {
+					...defaultSeatRecord({ name: fixed.name, bucket: fixed.bucket, kind: "named", order: fixed.order }),
+					activeAgentId: seat.activeAgentId ?? null,
+					lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
+					lastThreadId: seat.lastThreadId ?? null,
+					lastFinishNote: seat.lastFinishNote ?? null,
+					lastReuseSummary: seat.lastReuseSummary ?? null,
+				});
+				continue;
+			}
+			const number = contractorNumber(seat.name);
+			if (number === null) continue;
+			this.seats.set(
+				normalizedName,
+				{
+					...defaultSeatRecord({
+						name: `contractor-${number}`,
+						bucket: "contractor",
+						kind: "contractor",
+						order: number,
+					}),
+					activeAgentId: seat.activeAgentId ?? null,
+					lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
+					lastThreadId: seat.lastThreadId ?? null,
+					lastFinishNote: seat.lastFinishNote ?? null,
+					lastReuseSummary: seat.lastReuseSummary ?? null,
+				},
+			);
+		}
+		const highestSeen = Math.max(
+			0,
+			...this.listRosterSeats().map((seat) => contractorNumber(seat.name) ?? 0),
+		);
+		this.nextContractorNumber = Math.max(roster.nextContractorNumber ?? 1, highestSeen + 1);
+	}
+
+	private migrateLegacyRosterLinks() {
+		for (const seat of FIXED_SEATS) {
+			const agent = [...this.agents.values()].find(
+				(entry) =>
+					entry.name === seat.name &&
+					!entry.seatName &&
+					isAttachedState(entry.state) &&
+					!(this.seats.get(normalizeSeatName(seat.name))?.activeAgentId),
+			);
+			if (!agent) continue;
+			const nextSeat = {
+				...this.seats.get(normalizeSeatName(seat.name))!,
+				activeAgentId: agent.id,
+			};
+			this.seats.set(normalizeSeatName(seat.name), nextSeat);
+			this.agents.set(agent.id, {
+				...cloneAgent(agent),
+				name: seat.name,
+				seatName: seat.name,
+				seatBucket: seat.bucket,
+				seatKind: "named",
+			});
+		}
+	}
+
+	private normalizeRosterState() {
+		for (const agent of this.agents.values()) {
+			if (!agent.seatName) continue;
+			const key = normalizeSeatName(agent.seatName);
+			const existing = this.seats.get(key);
+			if (!existing) {
+				const number = contractorNumber(agent.seatName);
+				if (number === null) continue;
+				this.seats.set(
+					key,
+					defaultSeatRecord({
+						name: `contractor-${number}`,
+						bucket: "contractor",
+						kind: "contractor",
+						order: number,
+					}),
+				);
+			}
+		}
+
+		for (const seat of this.seats.values()) {
+			const active = seat.activeAgentId ? this.agents.get(seat.activeAgentId) : undefined;
+			if (active && !isAttachedState(active.state)) {
+				seat.activeAgentId = null;
+				seat.lastFinishedAgentId = active.id;
+				seat.lastThreadId = active.threadId ?? seat.lastThreadId ?? null;
+				seat.lastFinishNote = active.finishNote ?? seat.lastFinishNote ?? null;
+				seat.lastReuseSummary = active.reuseSummary ?? seat.lastReuseSummary ?? null;
+			}
+			if (seat.activeAgentId && !this.agents.has(seat.activeAgentId)) {
+				seat.activeAgentId = null;
+			}
+			if (seat.lastFinishedAgentId && !this.agents.has(seat.lastFinishedAgentId)) {
+				seat.lastFinishedAgentId = null;
+			}
+		}
+
+		for (const [id, agent] of this.agents.entries()) {
+			if (!agent.seatName) continue;
+			const seat = this.seats.get(normalizeSeatName(agent.seatName));
+			if (!seat) continue;
+			const next = {
+				...cloneAgent(agent),
+				name: seat.name,
+				seatBucket: seat.bucket,
+				seatKind: seat.kind,
+			};
+			if (isAttachedState(next.state)) {
+				if (!seat.activeAgentId) {
+					seat.activeAgentId = next.id;
+				}
+			} else if (!seat.activeAgentId && !seat.lastFinishedAgentId) {
+				seat.lastFinishedAgentId = next.id;
+				seat.lastThreadId = next.threadId ?? seat.lastThreadId ?? null;
+			}
+			this.agents.set(id, next);
+		}
+
+		const highestSeen = Math.max(
+			0,
+			...this.listRosterSeats().map((seat) => contractorNumber(seat.name) ?? 0),
+		);
+		this.nextContractorNumber = Math.max(this.nextContractorNumber, highestSeen + 1);
+	}
+
+	private requireSeat(name: string): RosterSeatRecord {
+		const seat = this.seats.get(normalizeSeatName(name));
+		if (!seat) throw new Error(`Unknown IC seat "${name}".`);
+		return cloneSeat(seat);
+	}
+
+	private requireSeatForAssignment(name: string): RosterSeatRecord {
+		const seat = this.requireSeat(name);
+		if (seat.activeAgentId) {
+			throw new Error(`${seat.name} already has an active assignment.`);
+		}
+		return seat;
+	}
+
+	private allocateSeat(bucket: AssignableRosterBucket): RosterSeatRecord {
+		const named = this.listRosterSeats().find((seat) => seat.kind === "named" && seat.bucket === bucket && !seat.activeAgentId);
+		if (named) return named;
+		const contractor = this.listRosterSeats().find((seat) => seat.kind === "contractor" && !seat.activeAgentId);
+		if (contractor) return contractor;
+		const seat = defaultSeatRecord({
+			name: `contractor-${this.nextContractorNumber}`,
+			bucket: "contractor",
+			kind: "contractor",
+			order: this.nextContractorNumber,
+		});
+		this.nextContractorNumber += 1;
+		this.seats.set(normalizeSeatName(seat.name), seat);
+		return cloneSeat(seat);
+	}
+
+	private releaseSeat(agent: AgentRecord, input: { note?: string | null; reuseSummary?: string | null } = {}) {
+		if (!agent.seatName) return;
+		const key = normalizeSeatName(agent.seatName);
+		const seat = this.seats.get(key);
+		if (!seat) return;
+		const nextSeat: RosterSeatRecord = {
+			...seat,
+			activeAgentId: seat.activeAgentId === agent.id ? null : seat.activeAgentId ?? null,
+			lastFinishedAgentId: agent.id,
+			lastThreadId: agent.threadId ?? seat.lastThreadId ?? null,
+			lastFinishNote: input.note ?? agent.finishNote ?? seat.lastFinishNote ?? null,
+			lastReuseSummary: input.reuseSummary ?? agent.reuseSummary ?? seat.lastReuseSummary ?? null,
+		};
+		this.seats.set(key, nextSeat);
+	}
+
+	private syncSeatLinks(previous: AgentRecord | undefined, next: AgentRecord) {
+		if (previous?.seatName && previous.seatName !== next.seatName) {
+			const previousSeat = this.seats.get(normalizeSeatName(previous.seatName));
+			if (previousSeat?.activeAgentId === previous.id) {
+				this.seats.set(normalizeSeatName(previous.seatName), { ...previousSeat, activeAgentId: null });
+			}
+		}
+		if (!next.seatName) return;
+		const key = normalizeSeatName(next.seatName);
+		const seat = this.seats.get(key);
+		if (!seat) return;
+		const nextSeat = { ...seat };
+		next.name = seat.name;
+		next.seatBucket = seat.bucket;
+		next.seatKind = seat.kind;
+		if (isAttachedState(next.state)) {
+			nextSeat.activeAgentId = next.id;
+		} else {
+			if (nextSeat.activeAgentId === next.id) nextSeat.activeAgentId = null;
+			nextSeat.lastFinishedAgentId = next.id;
+			nextSeat.lastThreadId = next.threadId ?? nextSeat.lastThreadId ?? null;
+			nextSeat.lastFinishNote = next.finishNote ?? nextSeat.lastFinishNote ?? null;
+			nextSeat.lastReuseSummary = next.reuseSummary ?? nextSeat.lastReuseSummary ?? null;
+		}
+		this.seats.set(key, nextSeat);
 	}
 
 	private updateAgent(agentId: string, updater: (agent: AgentRecord) => AgentRecord) {
