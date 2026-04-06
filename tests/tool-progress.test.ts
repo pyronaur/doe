@@ -60,11 +60,19 @@ test("buildToolProgressUpdate summarizes only live working agents", () => {
 test("startToolProgressUpdates streams refreshed summaries as registry state changes", () => {
 	const registry = new DoeRegistry();
 	const updates: string[] = [];
+	const workingMessages: string[] = [];
+	let stopped = false;
 	const stop = startToolProgressUpdates({
 		registry,
 		agentIds: ["agent-1", "agent-2"],
 		onUpdate(update) {
 			updates.push(update.content[0].text);
+		},
+		onProgressSummary(summary) {
+			workingMessages.push(summary);
+		},
+		onStop() {
+			stopped = true;
 		},
 	});
 
@@ -100,6 +108,8 @@ test("startToolProgressUpdates streams refreshed summaries as registry state cha
 	assert.match(updates[1] ?? "", /^Jane thinking\.\.\. \(0m 0\ds\)$/);
 	assert.match(updates[2] ?? "", /^Jane thinking\.\.\. \(0m 0\ds\) \| Tony thinking\.\.\. \(0m 1\ds\)$/);
 	assert.match(updates[3] ?? "", /^Tony thinking\.\.\. \(0m 1\ds\)$/);
+	assert.deepEqual(workingMessages, updates);
+	assert.equal(stopped, true);
 });
 
 test("readToolProgressSummary prefers structured partial details", () => {

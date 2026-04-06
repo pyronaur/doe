@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { Text } from "@mariozechner/pi-tui";
+import { Container, Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
@@ -54,6 +54,7 @@ interface SpawnToolDeps {
 	registry: DoeRegistry;
 	templatesDir: string;
 	getSessionSlug?: () => string | null;
+	setWorkingMessage?: (summary?: string) => void;
 }
 
 function inferName(prompt: string): string {
@@ -204,6 +205,8 @@ async function executeSpawnLike(
 			batchName,
 			partial: true,
 		},
+		onProgressSummary: deps.setWorkingMessage,
+		onStop: () => deps.setWorkingMessage?.(),
 	});
 
 	try {
@@ -335,9 +338,8 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			return new Text(theme.fg("accent", `codex_spawn ${label}`), 0, 0);
 		},
 		renderResult(result, options, theme) {
-			const partialSummary = options.isPartial ? readToolProgressSummary(result) : null;
-			if (partialSummary) {
-				return new Text(theme.fg("accent", partialSummary), 0, 0);
+			if (options.isPartial && readToolProgressSummary(result)) {
+				return new Container();
 			}
 			const details = (result as any).details ?? {};
 			const agents = Array.isArray(details.agents) ? details.agents : [];
@@ -345,8 +347,15 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			const body = agents.length > 0 ? summarizeAgents(agents) : result.content?.[0]?.text ?? "Spawned";
 			return new Text(`${theme.fg("accent", `DoE ${batch}`)}\n${body}`, 0, 0);
 		},
-		async execute(_toolCallId, params, signal, onUpdate) {
-			return executeSpawnLike(params, signal, onUpdate as any, deps);
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const setWorkingMessage = (summary?: string) => {
+				if (!ctx?.hasUI) return;
+				ctx.ui.setWorkingMessage(summary);
+			};
+			return executeSpawnLike(params, signal, onUpdate as any, {
+				...deps,
+				setWorkingMessage,
+			} as SpawnToolDeps & { setWorkingMessage?: (summary?: string) => void });
 		},
 	});
 
@@ -362,9 +371,8 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			return new Text(theme.fg("accent", `codex_delegate ${(args as any).batchName ?? "task"}`), 0, 0);
 		},
 		renderResult(result, options, theme) {
-			const partialSummary = options.isPartial ? readToolProgressSummary(result) : null;
-			if (partialSummary) {
-				return new Text(theme.fg("accent", partialSummary), 0, 0);
+			if (options.isPartial && readToolProgressSummary(result)) {
+				return new Container();
 			}
 			const details = (result as any).details ?? {};
 			const agents = Array.isArray(details.agents) ? details.agents : [];
@@ -372,8 +380,15 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			const body = agents.length > 0 ? summarizeAgents(agents) : result.content?.[0]?.text ?? "Delegated";
 			return new Text(`${theme.fg("accent", `DoE ${batch}`)}\n${body}`, 0, 0);
 		},
-		async execute(_toolCallId, params, signal, onUpdate) {
-			return executeSpawnLike(params, signal, onUpdate as any, deps);
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const setWorkingMessage = (summary?: string) => {
+				if (!ctx?.hasUI) return;
+				ctx.ui.setWorkingMessage(summary);
+			};
+			return executeSpawnLike(params, signal, onUpdate as any, {
+				...deps,
+				setWorkingMessage,
+			} as SpawnToolDeps & { setWorkingMessage?: (summary?: string) => void });
 		},
 	});
 }

@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { Text } from "@mariozechner/pi-tui";
+import { Container, Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { extractLastCompletedAgentMessage, truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
@@ -112,15 +112,14 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			return new Text(theme.fg("accent", `codex_resume ${(args as any).ic ?? (args as any).agentId ?? (args as any).threadId ?? "thread"}`), 0, 0);
 		},
 		renderResult(result, options, theme) {
-			const partialSummary = options.isPartial ? readToolProgressSummary(result) : null;
-			if (partialSummary) {
-				return new Text(theme.fg("accent", partialSummary), 0, 0);
+			if (options.isPartial && readToolProgressSummary(result)) {
+				return new Container();
 			}
 			const agent = (result as any).details?.agent;
 			const preview = truncateForDisplay(`${formatUsageCompact(agent?.usage)}${formatCompactionSignal(agent?.compaction) ? ` ${formatCompactionSignal(agent?.compaction)}` : ""} ${agent?.latestFinalOutput ?? agent?.latestSnippet ?? result.content?.[0]?.text ?? "Resumed"}`, 240);
 			return new Text(theme.fg("accent", preview), 0, 0);
 		},
-		async execute(_toolCallId, params, signal, onUpdate) {
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agent = resolveResumeTarget(deps.registry, params);
 			if (!agent?.threadId) {
 				throw new Error("Unknown IC/agent/thread. Provide an active seat name, or an existing agentId/threadId from codex_list/codex_inspect.");
@@ -164,6 +163,14 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				onUpdate: onUpdate as any,
 				baseDetails: {
 					partial: true,
+				},
+				onProgressSummary(summary) {
+					if (!ctx?.hasUI) return;
+					ctx.ui.setWorkingMessage(summary);
+				},
+				onStop() {
+					if (!ctx?.hasUI) return;
+					ctx.ui.setWorkingMessage();
 				},
 			});
 

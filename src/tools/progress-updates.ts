@@ -36,14 +36,17 @@ export function startToolProgressUpdates(input: {
 	agentIds: string[];
 	onUpdate?: ((update: any) => void) | undefined;
 	baseDetails?: Record<string, unknown>;
+	onProgressSummary?: ((summary: string) => void) | undefined;
+	onStop?: (() => void) | undefined;
 }): () => void {
-	if (!input.onUpdate) return () => {};
+	if (!input.onUpdate && !input.onProgressSummary) return () => {};
 	let lastSummary: string | null = null;
 
 	const emitProgress = () => {
 		const snapshot = buildToolProgressUpdate(input.registry, input.agentIds);
 		if (snapshot.progressSummary === lastSummary) return;
 		lastSummary = snapshot.progressSummary;
+		input.onProgressSummary?.(snapshot.progressSummary);
 		input.onUpdate?.({
 			content: [{ type: "text", text: snapshot.progressSummary }],
 			details: {
@@ -62,5 +65,6 @@ export function startToolProgressUpdates(input: {
 
 	return () => {
 		input.registry.off("event", handleEvent);
+		input.onStop?.();
 	};
 }
