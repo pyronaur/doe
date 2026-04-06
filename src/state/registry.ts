@@ -1078,7 +1078,20 @@ export class DoeRegistry extends EventEmitter {
 	private requireSeatForAssignment(name: string): RosterSeatRecord {
 		const seat = this.requireSeat(name);
 		if (seat.activeAgentId) {
-			throw new Error(`${seat.name} already has an active assignment.`);
+			const agent = this.agents.get(seat.activeAgentId);
+			if (!agent) {
+				throw new Error(`${seat.name} already has an occupied assignment.`);
+			}
+			if (agent.state === "completed") {
+				throw new Error(`${seat.name} is occupied by a completed assignment. Use codex_resume to continue that thread, or codex_finalize to release the seat before spawning fresh work.`);
+			}
+			if (agent.state === "awaiting_input") {
+				throw new Error(`${seat.name} is occupied by an assignment awaiting DOE input. Use codex_resume to continue that thread, or codex_finalize to release the seat before spawning fresh work.`);
+			}
+			if (agent.state === "working") {
+				throw new Error(`${seat.name} is occupied by active work. Use codex_resume to continue that thread, or wait/cancel before replacing it.`);
+			}
+			throw new Error(`${seat.name} already has an occupied assignment.`);
 		}
 		return seat;
 	}

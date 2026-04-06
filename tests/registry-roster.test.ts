@@ -142,7 +142,10 @@ test("fresh assignment on the same seat requires finalize after completion", () 
 	);
 	registry.markCompleted("thread-1", "done");
 
-	assert.throws(() => registry.assignSeat({ agentId: "agent-2", ic: "Hope" }), /already has an active assignment/);
+	assert.throws(
+		() => registry.assignSeat({ agentId: "agent-2", ic: "Hope" }),
+		/occupied by a completed assignment.*codex_resume.*codex_finalize/,
+	);
 	registry.finalizeSeat("Hope");
 	const secondSeat = registry.assignSeat({ agentId: "agent-2", ic: "Hope" });
 	registry.upsertAgent(
