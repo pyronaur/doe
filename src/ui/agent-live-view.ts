@@ -291,9 +291,9 @@ class AgentLiveViewComponent {
 		const agents = this.ensureSelection();
 		const body: string[] = [];
 		if (agents.length === 0) {
-			body.push(this.theme.fg("dim", " No active ICs"));
+			body.push(this.theme.fg("dim", " No occupied ICs"));
 			body.push(this.theme.fg("dim", " Use codex_spawn to delegate work"));
-			return this.renderFrame("DoE Active Roster", width, body);
+			return this.renderFrame("DoE Occupied Roster", width, body);
 		}
 
 		const selectedId = this.selectedAgentId;
@@ -303,7 +303,7 @@ class AgentLiveViewComponent {
 		const page = agents.slice(pageStart, pageStart + pageSize);
 		const summaries = this.registry.getRosterBucketSummaries();
 
-		body.push(this.theme.fg("accent", ` Active Working ICs ${agents.length}`));
+		body.push(this.theme.fg("accent", ` Occupied ICs ${agents.length}`));
 		for (const bucket of ROSTER_BUCKET_ORDER) {
 			const summary = summaries.find((entry) => entry.bucket === bucket);
 			if (!summary || summary.activeCount === 0) continue;
@@ -325,7 +325,7 @@ class AgentLiveViewComponent {
 			if (absoluteIndex < agents.length - 1) body.push(this.theme.fg("border", "─".repeat(Math.max(0, inner - 1))));
 		}
 
-		return this.renderFrame("DoE Active Roster", width, body);
+		return this.renderFrame("DoE Occupied Roster", width, body);
 	}
 
 	private buildDetailBodyLines(agent: AgentRecord, width: number): string[] {

@@ -40,41 +40,53 @@ function attachAgent(registry: DoeRegistry, input: { agentId: string; ic: string
 	return seat;
 }
 
-test("default roster queries show only active working seats in bucket order", () => {
+test("default roster queries show occupied seats in bucket order", () => {
 	const registry = new DoeRegistry();
 	attachAgent(registry, { agentId: "agent-1", ic: "Tony" });
 	attachAgent(registry, { agentId: "agent-2", ic: "Peter" });
 	attachAgent(registry, { agentId: "agent-3", ic: "Hope" });
 	registry.markAwaitingInput("agent-2-thread", "waiting");
+	registry.markCompleted("agent-3-thread", "done");
 
 	const roster = registry.listRosterAssignments();
 	const summaries = registry.getRosterBucketSummaries();
 
-	assert.deepEqual(roster.map((entry) => entry.seat.name), ["Tony", "Hope"]);
+	assert.deepEqual(roster.map((entry) => `${entry.seat.name}:${entry.agent.state}:${entry.source}`), [
+		"Tony:working:active",
+		"Peter:awaiting_input:active",
+		"Hope:completed:active",
+	]);
 	assert.deepEqual(
 		summaries.map((entry) => `${entry.bucket}:${entry.activeCount}:${entry.names.join(",")}`),
 		[
 			"senior:1:Tony",
-			"mid:0:",
+			"mid:1:Peter",
 			"research:1:Hope",
 			"contractor:0:",
 		],
 	);
 });
 
-test("roster queries opt in to awaiting-input seats and seat history", () => {
+test("roster history opts in released seats while default remains occupied-only", () => {
 	const registry = new DoeRegistry();
 	attachAgent(registry, { agentId: "agent-1", ic: "Tony" });
 	attachAgent(registry, { agentId: "agent-2", ic: "Hope" });
-	registry.markAwaitingInput("agent-2-thread", "waiting");
 	registry.markCompleted("agent-1-thread", "done");
+	registry.finalizeSeat("Tony");
+	registry.markAwaitingInput("agent-2-thread", "waiting");
 
-	const roster = registry.listRosterAssignments({ includeAwaitingInput: true, includeHistory: true });
-	const summaries = registry.getRosterBucketSummaries({ includeAwaitingInput: true, includeHistory: true });
+	const occupied = registry.listRosterAssignments();
+	const roster = registry.listRosterAssignments({ includeHistory: true });
+	const summaries = registry.getRosterBucketSummaries({ includeHistory: true });
+
+	assert.deepEqual(
+		occupied.map((entry) => `${entry.seat.name}:${entry.agent.state}:${entry.source}`),
+		["Hope:awaiting_input:active"],
+	);
 
 	assert.deepEqual(
 		roster.map((entry) => `${entry.seat.name}:${entry.agent.state}:${entry.source}`),
-		["Tony:completed:active", "Hope:awaiting_input:active"],
+		["Tony:finalized:history", "Hope:awaiting_input:active"],
 	);
 	assert.deepEqual(
 		summaries.map((entry) => `${entry.bucket}:${entry.activeCount}:${entry.names.join(",")}`),

@@ -43,7 +43,7 @@ function formatActiveWidget(registry: DoeRegistry): string[] {
 	if (roster.length === 0) return [];
 	const summaries = registry.getRosterBucketSummaries();
 	return [
-		`DoE Active Roster (${roster.length})`,
+		`DoE Occupied Roster (${roster.length})`,
 		...summaries
 			.filter((entry) => entry.activeCount > 0)
 			.map((entry) => `${entry.label}: ${entry.names.join(", ")}`),

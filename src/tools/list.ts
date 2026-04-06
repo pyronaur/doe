@@ -33,9 +33,9 @@ export function registerListTool(pi: ExtensionAPI, deps: { registry: DoeRegistry
 		description: "List the active DOE roster by named IC. Legacy agent-centric filters remain available for debug use.",
 		promptSnippet: "List active DOE ICs to find the right seat before resuming, inspecting, cancelling, or finalizing.",
 		promptGuidelines: [
-			"Default output shows only currently working ICs.",
-			"Set includeAwaitingInput=true to show occupied non-working seats.",
-			"Set includeHistory=true to include completed seat attachments and released seat history.",
+			"Default output shows occupied ICs: working, awaiting_input, and completed-but-not-finalized seats.",
+			"Set includeAwaitingInput=false only when you explicitly want to hide waiting seats.",
+			"Set includeHistory=true to also include released seat history beyond currently occupied seats.",
 			"Use includeIds=true only when raw agentId/threadId details are actually needed.",
 		],
 		parameters: Type.Object({
@@ -80,15 +80,15 @@ export function registerListTool(pi: ExtensionAPI, deps: { registry: DoeRegistry
 			}
 
 			const roster = deps.registry.listRosterAssignments({
-				includeAwaitingInput: params.includeAwaitingInput ?? false,
+				includeAwaitingInput: params.includeAwaitingInput ?? true,
 				includeHistory: params.includeHistory ?? false,
 				limit: params.limit,
 			});
 			const summaries = deps.registry.getRosterBucketSummaries({
-				includeAwaitingInput: params.includeAwaitingInput ?? false,
+				includeAwaitingInput: params.includeAwaitingInput ?? true,
 				includeHistory: params.includeHistory ?? false,
 			});
-			const countLabel = params.includeAwaitingInput || params.includeHistory ? "visible" : "active_working";
+			const countLabel = params.includeHistory || params.includeAwaitingInput === false ? "visible" : "occupied";
 			const includeIds = params.includeIds ?? false;
 			const lines: string[] = [
 				`${countLabel}: ${roster.length}`,

@@ -465,7 +465,7 @@ export class DoeRegistry extends EventEmitter {
 	}
 
 	listRosterAssignments(options: { includeAwaitingInput?: boolean; includeHistory?: boolean; limit?: number } = {}): RosterAssignmentRecord[] {
-		const { includeAwaitingInput = false, includeHistory = false, limit } = options;
+		const { includeAwaitingInput = true, includeHistory = false, limit } = options;
 		const entries: RosterAssignmentRecord[] = [];
 		for (const seat of this.listRosterSeats()) {
 			const active = seat.activeAgentId ? this.getAgent(seat.activeAgentId) : undefined;
@@ -477,7 +477,7 @@ export class DoeRegistry extends EventEmitter {
 				entries.push({ seat, agent: active, source: "active" });
 				continue;
 			}
-			if (includeHistory && active?.state === "completed") {
+			if (active?.state === "completed") {
 				entries.push({ seat, agent: active, source: "active" });
 				continue;
 			}
@@ -495,7 +495,7 @@ export class DoeRegistry extends EventEmitter {
 			counts.set(bucket, { bucket, label: ROSTER_BUCKET_LABELS[bucket], activeCount: 0, names: [] });
 		}
 		for (const entry of this.listRosterAssignments({
-			includeAwaitingInput: options.includeAwaitingInput ?? false,
+			includeAwaitingInput: options.includeAwaitingInput ?? true,
 			includeHistory: options.includeHistory ?? false,
 		})) {
 			const summary = counts.get(entry.seat.bucket)!;
