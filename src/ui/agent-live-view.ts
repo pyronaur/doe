@@ -1,10 +1,11 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { extractThreadTranscript, truncateForDisplay } from "../codex/client.js";
-import { formatCompactionSignal, formatUsageBreakdown, formatUsageCompact } from "../context-usage.js";
+import { formatUsageBreakdown } from "../context-usage.js";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import type { AgentRecord, DoeRegistry } from "../state/registry.js";
 import { ROSTER_BUCKET_LABELS, ROSTER_BUCKET_ORDER } from "../state/registry.js";
+import { formatAgentProgressLine } from "./agent-progress.js";
 
 type ViewMode = "list" | "detail";
 
@@ -50,18 +51,6 @@ function formatTimestamp(value: number | null | undefined): string {
 	return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-export function formatElapsed(startedAt: number, completedAt?: number | null): string {
-	const end = completedAt ?? Date.now();
-	const seconds = Math.max(0, Math.floor((end - startedAt) / 1000));
-	const mins = Math.floor(seconds / 60);
-	const secs = seconds % 60;
-	if (mins >= 60) {
-		const hours = Math.floor(mins / 60);
-		return `${hours}h ${mins % 60}m`;
-	}
-	return `${mins}m ${String(secs).padStart(2, "0")}s`;
-}
-
 function listViewportSize(): number {
 	const rows = process.stdout.rows ?? 32;
 	return Math.max(8, Math.min(18, rows - 10));
@@ -69,12 +58,6 @@ function listViewportSize(): number {
 
 function detailViewportSize(): number {
 	return 12;
-}
-
-function agentMeta(agent: AgentRecord): string {
-	const state = agent.activityLabel ?? agent.state;
-	const compaction = formatCompactionSignal(agent.compaction);
-	return `${state} | ${agent.model} | ${formatElapsed(agent.startedAt, agent.completedAt)} | ${formatUsageCompact(agent.usage)}${compaction ? ` | ${compaction}` : ""}`;
 }
 
 class AgentLiveViewComponent {
@@ -317,7 +300,7 @@ class AgentLiveViewComponent {
 			const selected = agent.id === selectedId;
 			const marker = selected ? this.theme.fg("accent", "›") : " ";
 			const title = truncateToWidth(`${absoluteIndex + 1}. ${agent.name}`, inner - 2);
-			const meta = truncateToWidth(agentMeta(agent), inner - 2);
+			const meta = truncateToWidth(formatAgentProgressLine(agent, { includeName: false }), inner - 2);
 			const preview = truncateToWidth(truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, inner - 6) || "(no transcript yet)", inner - 2);
 			body.push(`${marker} ${selected ? this.theme.fg("accent", title) : title}`);
 			body.push(`  ${selected ? this.theme.fg("warning", meta) : this.theme.fg("muted", meta)}`);
@@ -369,7 +352,8 @@ class AgentLiveViewComponent {
 
 		const body: string[] = [];
 		body.push(this.theme.fg("accent", ` ${agent.seatName ?? agent.name}`));
-		body.push(` ${agent.activityLabel ?? agent.state} | ${agent.model} | ${agent.allowWrite ? "write" : "read-only"}`);
+		body.push(` ${formatAgentProgressLine(agent)}`);
+		body.push(` ${agent.model} | ${agent.allowWrite ? "write" : "read-only"}`);
 		body.push(` cwd: ${truncateForDisplay(agent.cwd, inner - 6)}`);
 		body.push(` started: ${formatTimestamp(agent.startedAt)} | completed: ${formatTimestamp(agent.completedAt ?? null)}`);
 		for (const line of formatUsageBreakdown(agent.usage, agent.compaction)) {

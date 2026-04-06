@@ -14,8 +14,8 @@ import {
 } from "./src/plan/session-state.js";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./src/plan/reminder.js";
 import { DoeRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
-import { AgentLiveViewController, formatElapsed } from "./src/ui/agent-live-view.js";
-import { formatUsageCompact } from "./src/context-usage.js";
+import { AgentLiveViewController } from "./src/ui/agent-live-view.js";
+import { formatAgentProgressLine } from "./src/ui/agent-progress.js";
 import { loadMarkdownDoc, loadMarkdownDocs, summarizeTemplates } from "./src/templates/loader.js";
 import { registerPlanStartTool } from "./src/tools/plan-start.js";
 import { registerPlanResumeTool } from "./src/tools/plan-resume.js";
@@ -64,14 +64,7 @@ function formatActiveWidget(registry: DoeRegistry): string[] {
 		...summaries
 			.filter((entry) => entry.activeCount > 0)
 			.map((entry) => `${entry.label}: ${entry.names.join(", ")}`),
-		...roster.map(({ agent }, index) => {
-			const signal = agent.compaction?.inProgress
-				? " | compacting"
-				: (agent.compaction?.count ?? 0) > 0
-					? " | compacted reseed?"
-					: "";
-			return `${index + 1}. ${agent.name} | ${agent.activityLabel ?? agent.state} | ${formatElapsed(agent.startedAt, agent.completedAt)} | ${formatUsageCompact(agent.usage)}${signal}`;
-		}),
+		...roster.map(({ agent }, index) => `${index + 1}. ${formatAgentProgressLine(agent)}`),
 		`${DOE_MONITOR_SHORTCUT} monitor`,
 	];
 }

@@ -184,3 +184,24 @@ test("restore keeps completed seat attachments name-first without marking them r
 	assert.equal(restored.findAgent("Tony")?.id, "agent-1");
 	assert.deepEqual(restored.listRecoverableAgents().map((agent) => agent.id), []);
 });
+
+test("legacy snapshots gain runStartedAt from startedAt during restore", () => {
+	const registry = new DoeRegistry();
+	registry.restore({
+		version: 4,
+		savedAt: Date.now(),
+		agents: [
+			createAgent({
+				id: "agent-1",
+				name: "Tony",
+				threadId: "thread-1",
+				state: "completed",
+				startedAt: 123,
+				completedAt: 456,
+			}),
+		],
+		batches: [],
+	});
+
+	assert.equal(registry.getAgent("agent-1")?.runStartedAt, 123);
+});

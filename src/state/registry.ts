@@ -42,6 +42,7 @@ export interface AgentRecord {
 	usage?: AgentUsageSnapshot | null;
 	compaction?: AgentCompactionState | null;
 	startedAt: number;
+	runStartedAt?: number | null;
 	completedAt?: number | null;
 	parentBatchId?: string | null;
 	notificationMode: NotificationMode;
@@ -234,6 +235,7 @@ function cloneAgent(agent: AgentRecord): AgentRecord {
 		seatName: agent.seatName ?? null,
 		seatBucket: agent.seatBucket ?? null,
 		seatKind: agent.seatKind ?? null,
+		runStartedAt: agent.runStartedAt ?? agent.startedAt,
 		finishNote: agent.finishNote ?? null,
 		reuseSummary: agent.reuseSummary ?? null,
 	};
@@ -293,6 +295,7 @@ function normalizeAgentRecord(agent: AgentRecord): AgentRecord {
 							: "thinking"),
 		recovered: true,
 		compaction: agent.compaction ? createCompactionState(agent.compaction) : null,
+		runStartedAt: agent.runStartedAt ?? agent.startedAt,
 	};
 }
 
@@ -571,6 +574,7 @@ export class DoeRegistry extends EventEmitter {
 			activeTurnId: turnId,
 			state: "working",
 			activityLabel: "thinking",
+			runStartedAt: agent.runStartedAt ?? agent.startedAt,
 			completedAt: null,
 		}));
 	}
@@ -883,7 +887,7 @@ export class DoeRegistry extends EventEmitter {
 
 	serialize(): PersistedRegistrySnapshot {
 		return {
-			version: 4,
+			version: 5,
 			savedAt: Date.now(),
 			agents: this.listAgents(),
 			batches: this.listBatches(),
