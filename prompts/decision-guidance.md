@@ -46,3 +46,11 @@
 - Expected deliverable
 - Do not include hidden assumptions about write access
 - Do not ask the worker to do work that belongs to the Director
+
+
+## Handoff and shared context
+- During a session, pick a slug that fits the session topic (e.g. `fix-auth-flow`, `refactor-cache`).
+- Direct all workers to write findings, plans, and artifacts to `.tmp/{slug}/`.
+- You can ask any worker to output as many files as necessary, `.tmp/{slug}/research-widgets.md`, `.tmp/{slug}/research-widget-api.md`, etc.
+- When handing off to the next worker, pass the relevant files explicitly in the prompt, if necessary.
+- Do not re-research what is already in `.tmp/{slug}/`. If you need to improve the document, spawn a smarter/better reasoning model to improve on the target document.
