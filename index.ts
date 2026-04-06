@@ -423,9 +423,9 @@ export default function doeExtension(pi: ExtensionAPI) {
 				break;
 			case "turn-completed":
 				if (event.status === "completed") {
-					runtime.registry.markCompleted(event.threadId);
+					runtime.registry.markCompleted(event.threadId, event.turnId, null);
 				} else if (event.status === "failed") {
-					runtime.registry.markError(event.threadId, event.error ?? "Codex turn failed.");
+					runtime.registry.markError(event.threadId, event.error ?? "Codex turn failed.", event.turnId);
 				} else {
 					runtime.registry.markAwaitingInput(event.threadId, event.error ?? `Turn ended with status: ${event.status}`);
 				}

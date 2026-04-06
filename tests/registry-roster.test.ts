@@ -208,3 +208,35 @@ test("legacy snapshots gain runStartedAt from startedAt during restore", () => {
 
 	assert.equal(registry.getAgent("agent-1")?.runStartedAt, 123);
 });
+
+test("cancelAgent releases the seat and ignores late completion for the interrupted turn", () => {
+	const registry = new DoeRegistry();
+	const seat = registry.assignSeat({ agentId: "agent-1", ic: "Hope" });
+	registry.upsertAgent(
+		createAgent({
+			id: "agent-1",
+			name: seat.name,
+			threadId: "thread-1",
+			activeTurnId: "turn-1",
+			seatName: seat.name,
+			seatBucket: seat.bucket,
+			seatKind: seat.kind,
+		}),
+	);
+
+	const cancelled = registry.cancelAgent("agent-1", {
+		note: "Cancelled by Director of Engineering.",
+		interruptedTurnId: "turn-1",
+	});
+	registry.markCompleted("thread-1", "turn-1", "late completion");
+
+	assert.equal(cancelled.state, "finalized");
+	assert.equal(registry.findActiveSeatAgent("Hope"), undefined);
+	assert.equal(registry.findLastFinishedSeatAgent("Hope")?.id, "agent-1");
+	assert.equal(registry.findSeat("Hope")?.activeAgentId, null);
+	assert.equal(registry.findSeat("Hope")?.lastFinishNote, "Cancelled by Director of Engineering.");
+	assert.equal(registry.getAgent("agent-1")?.state, "finalized");
+
+	const replacement = registry.assignSeat({ agentId: "agent-2", ic: "Hope" });
+	assert.equal(replacement.name, "Hope");
+});

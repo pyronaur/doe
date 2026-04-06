@@ -12,6 +12,7 @@ import type { AssignableRosterBucket, NotificationMode, DoeRegistry } from "../s
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.js";
 import { normalizeSpawnSeatIntent } from "./spawn-seat-intent.js";
+import { cancelAgentRun } from "./cancel-agent-run.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
@@ -311,6 +312,20 @@ async function executeSpawnLike(
 				agents: finalAgents,
 			},
 		};
+	} catch (error) {
+		if (error instanceof Error && error.message === "Cancelled") {
+			for (const agentId of agentIds) {
+				const agent = deps.registry.getAgent(agentId);
+				if (!agent || agent.state !== "working") continue;
+				await cancelAgentRun({
+					agent,
+					client: deps.client,
+					registry: deps.registry,
+					note: "Cancelled by Director of Engineering.",
+				});
+			}
+		}
+		throw error;
 	} finally {
 		stopProgressUpdates();
 	}

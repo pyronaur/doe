@@ -10,6 +10,7 @@ import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type S
 import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.js";
+import { cancelAgentRun } from "./cancel-agent-run.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
@@ -221,6 +222,16 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 					content: [{ type: "text", text: [`ic: ${finalAgent.name}`, `state: ${finalAgent.state}`, `context: ${formatUsageCompact(finalAgent.usage)}`, ...(formatCompactionSignal(finalAgent.compaction) ? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`] : []), "", text ?? "Completed"].join("\n") }],
 					details: { agent: finalAgent },
 				};
+			} catch (error) {
+				if (error instanceof Error && error.message === "Cancelled") {
+					await cancelAgentRun({
+						agent: deps.registry.getAgent(agent.id) ?? agent,
+						client: deps.client,
+						registry: deps.registry,
+						note: "Cancelled by Director of Engineering.",
+					});
+				}
+				throw error;
 			} finally {
 				stopProgressUpdates();
 			}

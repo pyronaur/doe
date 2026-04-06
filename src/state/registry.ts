@@ -44,6 +44,7 @@ export interface AgentRecord {
 	startedAt: number;
 	runStartedAt?: number | null;
 	completedAt?: number | null;
+	interruptedTurnId?: string | null;
 	parentBatchId?: string | null;
 	notificationMode: NotificationMode;
 	returnMode: ReturnMode;
@@ -236,6 +237,7 @@ function cloneAgent(agent: AgentRecord): AgentRecord {
 		seatBucket: agent.seatBucket ?? null,
 		seatKind: agent.seatKind ?? null,
 		runStartedAt: agent.runStartedAt ?? agent.startedAt,
+		interruptedTurnId: agent.interruptedTurnId ?? null,
 		finishNote: agent.finishNote ?? null,
 		reuseSummary: agent.reuseSummary ?? null,
 	};
@@ -296,7 +298,14 @@ function normalizeAgentRecord(agent: AgentRecord): AgentRecord {
 		recovered: true,
 		compaction: agent.compaction ? createCompactionState(agent.compaction) : null,
 		runStartedAt: agent.runStartedAt ?? agent.startedAt,
+		interruptedTurnId: agent.interruptedTurnId ?? null,
 	};
+}
+
+function shouldIgnoreInterruptedTerminalUpdate(agent: AgentRecord, turnId?: string | null): boolean {
+	if (!agent.interruptedTurnId) return false;
+	if (turnId && agent.interruptedTurnId !== turnId) return false;
+	return agent.state === "awaiting_input" || agent.state === "finalized";
 }
 
 export function mergeHydratedMessages(current: AgentMessageRecord[], hydrated: AgentMessageRecord[]): AgentMessageRecord[] {
@@ -542,6 +551,32 @@ export class DoeRegistry extends EventEmitter {
 		return { seat: this.findSeat(seat.name)!, agent: saved };
 	}
 
+	cancelAgent(
+		agentId: string,
+		input: { note?: string | null; interruptedTurnId?: string | null; reuseSummary?: string | null } = {},
+	): AgentRecord {
+		const agent = this.agents.get(agentId);
+		if (!agent) {
+			throw new Error(`Unknown agent "${agentId}".`);
+		}
+		const finalized = {
+			...cloneAgent(agent),
+			state: "finalized" as const,
+			activityLabel: "completed" as const,
+			activeTurnId: null,
+			completedAt: Date.now(),
+			interruptedTurnId: input.interruptedTurnId ?? agent.interruptedTurnId ?? null,
+			finishNote: input.note ?? agent.finishNote ?? null,
+			reuseSummary: input.reuseSummary ?? agent.reuseSummary ?? null,
+			latestSnippet: input.note ? tailSnippet(input.note) : agent.latestSnippet,
+		};
+		this.releaseSeat(finalized, {
+			note: finalized.finishNote ?? null,
+			reuseSummary: finalized.reuseSummary ?? null,
+		});
+		return this.upsertAgent(finalized);
+	}
+
 	markThreadAttached(agentId: string, details: { threadId: string; activeTurnId?: string | null; recovered?: boolean }) {
 		this.updateAgent(agentId, (agent) => ({
 			...agent,
@@ -572,6 +607,7 @@ export class DoeRegistry extends EventEmitter {
 		this.updateAgentByThread(threadId, (agent) => ({
 			...agent,
 			activeTurnId: turnId,
+			interruptedTurnId: null,
 			state: "working",
 			activityLabel: "thinking",
 			runStartedAt: agent.runStartedAt ?? agent.startedAt,
@@ -755,16 +791,22 @@ export class DoeRegistry extends EventEmitter {
 		}));
 	}
 
-	markCompleted(threadId: string, finalOutput?: string | null) {
+	markCompleted(threadId: string, turnIdOrOutput?: string | null, finalOutput?: string | null) {
+		const turnId = finalOutput === undefined ? null : (turnIdOrOutput ?? null);
+		const outputOverride = finalOutput === undefined ? (turnIdOrOutput ?? null) : finalOutput;
 		this.updateAgentByThread(threadId, (agent) => {
+			if (shouldIgnoreInterruptedTerminalUpdate(agent, turnId)) {
+				return agent;
+			}
 			const summary = latestAgentSummary(agent.messages);
-			const output = finalOutput ?? summary?.latestFinalOutput ?? agent.latestFinalOutput ?? agent.latestSnippet;
+			const output = outputOverride ?? summary?.latestFinalOutput ?? agent.latestFinalOutput ?? agent.latestSnippet;
 			const next = {
 				...agent,
 				state: "completed" as const,
 				activityLabel: "completed" as const,
 				completedAt: Date.now(),
 				activeTurnId: null,
+				interruptedTurnId: null,
 				latestFinalOutput: output,
 				latestSnippet: output ? tailSnippet(output) : agent.latestSnippet,
 			};
@@ -779,19 +821,24 @@ export class DoeRegistry extends EventEmitter {
 			activityLabel: "awaiting input",
 			completedAt: Date.now(),
 			activeTurnId: null,
+			interruptedTurnId: null,
 			latestSnippet: note ? tailSnippet(note) : agent.latestSnippet,
 		}));
 	}
 
-	markError(threadId: string, error: string) {
+	markError(threadId: string, error: string, turnId?: string | null) {
 		const normalizedError = normalizeErrorText(error);
 		this.updateAgentByThread(threadId, (agent) => {
+			if (shouldIgnoreInterruptedTerminalUpdate(agent, turnId)) {
+				return agent;
+			}
 			const next = {
 				...agent,
 				state: "error" as const,
 				activityLabel: "error" as const,
 				completedAt: Date.now(),
 				activeTurnId: null,
+				interruptedTurnId: null,
 				lastError: normalizedError,
 				latestSnippet: tailSnippet(normalizedError),
 			};
@@ -808,6 +855,7 @@ export class DoeRegistry extends EventEmitter {
 				activityLabel: "error" as const,
 				completedAt: Date.now(),
 				activeTurnId: null,
+				interruptedTurnId: null,
 				lastError: normalizedError,
 				latestSnippet: tailSnippet(normalizedError),
 			};
