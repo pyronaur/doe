@@ -80,3 +80,36 @@ test("occupied widget still shows non-working occupied seats", () => {
 	assert.match(lines[2] ?? "", /^1\. Hope completed \(0m 0\ds\)$/);
 	assert.equal(lines[3], "ctrl+, monitor");
 });
+
+test("occupied widget hides cancelled awaiting-input seats", () => {
+	const registry = new DoeRegistry();
+	attachAgent(registry, {
+		agentId: "agent-1",
+		ic: "Hope",
+		state: "awaiting_input",
+		activityLabel: "awaiting input",
+	});
+	registry.upsertAgent({
+		...registry.getAgent("agent-1")!,
+		latestSnippet: "Interrupted by Director of Engineering.",
+	});
+
+	assert.deepEqual(formatOccupiedWidget(registry, "ctrl+,"), []);
+});
+
+test("occupied widget hides completed seats that ended in operation aborted", () => {
+	const registry = new DoeRegistry();
+	attachAgent(registry, {
+		agentId: "agent-1",
+		ic: "Hope",
+		state: "completed",
+		activityLabel: "completed",
+	});
+	registry.upsertAgent({
+		...registry.getAgent("agent-1")!,
+		latestFinalOutput: "Operation aborted",
+		latestSnippet: "Operation aborted",
+	});
+
+	assert.deepEqual(formatOccupiedWidget(registry, "ctrl+,"), []);
+});
