@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { isToolCallEventType, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { CodexAppServerClient } from "./src/codex/app-server-client.js";
 import { validateModelId } from "./src/codex/model-selection.js";
 import type { CodexClientEvent } from "./src/codex/client.js";
@@ -28,12 +28,25 @@ import { registerListTool } from "./src/tools/list.js";
 import { registerInspectTool } from "./src/tools/inspect.js";
 import { registerCancelTool } from "./src/tools/cancel.js";
 import { registerFinalizeTool } from "./src/tools/finalize.js";
+import { ensureReadToolActive, evaluateReadGate } from "./src/read-gate.ts";
 
 const DOE_FLAG = "doe";
 const PLANNOTATOR_REQUEST_CHANNEL = "plannotator:request";
 const PLANNOTATOR_REVIEW_RESULT_CHANNEL = "plannotator:review-result";
 const PLANNOTATOR_TIMEOUT_MS = 5_000;
-const TOOL_NAMES = ["session_set", "plan_start", "plan_resume", "plan_stop", "codex_spawn", "codex_delegate", "codex_resume", "codex_list", "codex_inspect", "codex_cancel", "codex_finalize"];
+const TOOL_NAMES = ensureReadToolActive([
+	"session_set",
+	"plan_start",
+	"plan_resume",
+	"plan_stop",
+	"codex_spawn",
+	"codex_delegate",
+	"codex_resume",
+	"codex_list",
+	"codex_inspect",
+	"codex_cancel",
+	"codex_finalize",
+]);
 const DOE_MONITOR_SHORTCUT = "ctrl+,";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = join(__dirname, "prompts");
@@ -488,6 +501,17 @@ export default function doeExtension(pi: ExtensionAPI) {
 		return {
 			systemPrompt: guidance,
 		};
+	});
+
+	pi.on("tool_call", async (event, ctx) => {
+		if (!isDoeEnabled()) return;
+		if (!isToolCallEventType("read", event)) return;
+		return evaluateReadGate({
+			cwd: ctx.cwd,
+			hasUI: ctx.hasUI,
+			input: event.input,
+			confirm: ctx.hasUI ? (title, message) => ctx.ui.confirm(title, message) : undefined,
+		});
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
