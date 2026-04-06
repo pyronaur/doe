@@ -11,8 +11,12 @@ export function registerListTool(pi: ExtensionAPI, deps: { registry: DoeRegistry
 	pi.registerTool({
 		name: "codex_list",
 		label: "Codex List",
-		description: "List active and recent Codex workstreams known to the Director of Engineering.",
-		promptSnippet: "List active or recent Codex workstreams before choosing a thread to resume.",
+		description: "List active and recent Codex workstreams with their agentIds.",
+		promptSnippet: "List recent workstreams to find an agentId before resuming or inspecting.",
+		promptGuidelines: [
+			"Use before resuming when the right thread isn't obvious.",
+			"Output includes agentIds — pass these to codex_resume or codex_inspect.",
+		],
 		parameters: Type.Object({
 			state: Type.Optional(StateSchema),
 			limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50 })),

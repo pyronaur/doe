@@ -38,13 +38,13 @@ export function registerInspectTool(
 	pi.registerTool({
 		name: "codex_inspect",
 		label: "Codex Inspect",
-		description: "Inspect a Codex workstream, including readable prompts, outputs, and thread history.",
-		promptSnippet: "Inspect a worker when you need its exact prompt, latest output, or a readable transcript.",
+		description: "Inspect a Codex workstream — prompt, output, and thread history.",
+		promptSnippet: "Inspect a specific worker to read its output or get its threadId.",
 		promptGuidelines: [
-			"Use this for one-off lookups, explicit user requests, or thread-selection clarity.",
-			"Prefer history=first_last or history=transcript for readable prompts and outputs.",
-			"Use history=raw only for debugging metadata; raw thread objects stay in tool details, not the conversational output.",
-			"Do not use this tool as a polling loop for active workers.",
+			"Use for one-off lookups before deciding next steps. Do not use as a polling loop.",
+			"Use history=first_last or history=transcript for readable output.",
+			"Use history=raw only for debugging — keep raw output out of conversational responses.",
+			"Returns threadId — use this when codex_resume needs a threadId instead of agentId.",
 		],
 		parameters: Type.Object({
 			agentId: Type.Optional(Type.String()),

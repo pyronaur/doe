@@ -11,8 +11,13 @@ export function registerCancelTool(
 	pi.registerTool({
 		name: "codex_cancel",
 		label: "Codex Cancel",
-		description: "Interrupt an in-flight Codex turn for registry hygiene or user control.",
-		promptSnippet: "Interrupt an in-flight Codex worker when the user wants to stop it.",
+		description: "Cancel an in-flight Codex worker by agentId or threadId.",
+		promptSnippet: "Cancel a specific worker when the user wants it stopped.",
+		promptGuidelines: [
+			"Requires explicit agentId or threadId — there is no global cancel.",
+			"Interrupts the active turn if one exists. Errors if no match is found.",
+			"Do not use to cancel an idle thread just to spawn fresh — use codex_spawn directly instead.",
+		],
 		parameters: Type.Object({
 			agentId: Type.Optional(Type.String()),
 			threadId: Type.Optional(Type.String()),
