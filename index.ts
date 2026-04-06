@@ -13,9 +13,10 @@ import { registerResumeTool } from "./src/tools/resume.js";
 import { registerListTool } from "./src/tools/list.js";
 import { registerInspectTool } from "./src/tools/inspect.js";
 import { registerCancelTool } from "./src/tools/cancel.js";
+import { registerFinalizeTool } from "./src/tools/finalize.js";
 
 const DOE_FLAG = "doe";
-const TOOL_NAMES = ["codex_spawn", "codex_delegate", "codex_resume", "codex_list", "codex_inspect", "codex_cancel"];
+const TOOL_NAMES = ["codex_spawn", "codex_delegate", "codex_resume", "codex_list", "codex_inspect", "codex_cancel", "codex_finalize"];
 const DOE_MONITOR_SHORTCUT = "ctrl+,";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = join(__dirname, "prompts");
@@ -38,12 +39,15 @@ async function refreshThreadUsage(runtime: DoeRuntime, threadId: string, turnId:
 }
 
 function formatActiveWidget(registry: DoeRegistry): string[] {
-	const agents = registry.listAgents({ includeCompleted: false });
-	if (agents.length === 0) return [];
+	const roster = registry.listRosterAssignments();
+	if (roster.length === 0) return [];
+	const summaries = registry.getRosterBucketSummaries();
 	return [
-		`DoE Active Agents (${agents.length})`,
-		"Currently running workstreams:",
-		...agents.map((agent, index) => {
+		`DoE Active Roster (${roster.length})`,
+		...summaries
+			.filter((entry) => entry.activeCount > 0)
+			.map((entry) => `${entry.label}: ${entry.names.join(", ")}`),
+		...roster.map(({ agent }, index) => {
 			const signal = agent.compaction?.inProgress
 				? " | compacting"
 				: (agent.compaction?.count ?? 0) > 0
@@ -56,10 +60,7 @@ function formatActiveWidget(registry: DoeRegistry): string[] {
 }
 
 function primaryActiveAgent(registry: DoeRegistry) {
-	return registry
-		.listAgents({ includeCompleted: false })
-		.find((agent) => agent.state === "working")
-		?? null;
+	return registry.listRosterAssignments()[0]?.agent ?? null;
 }
 
 function latestSnapshot(ctx: ExtensionContext): PersistedRegistrySnapshot | null {
@@ -119,6 +120,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 		registerListTool(pi, { registry });
 		registerInspectTool(pi, { client, registry });
 		registerCancelTool(pi, { client, registry });
+		registerFinalizeTool(pi, { registry });
 
 		pi.registerShortcut(DOE_MONITOR_SHORTCUT, {
 			description: "Open or close the Director of Engineering live monitor",
@@ -175,8 +177,8 @@ export default function doeExtension(pi: ExtensionAPI) {
 
 	function updateUi(ctx: ExtensionContext) {
 		if (!runtime || !ctx.hasUI) return;
-		const active = runtime.registry.listAgents({ includeCompleted: false }).length;
-		ctx.ui.setStatus("doe", ctx.ui.theme.fg("accent", `🧭 DoE ${active} active`));
+		const active = runtime.registry.listRosterAssignments().length;
+		ctx.ui.setStatus("doe", ctx.ui.theme.fg("accent", `🧭 DoE ${active} active IC${active === 1 ? "" : "s"}`));
 		const widget = formatActiveWidget(runtime.registry);
 		ctx.ui.setWidget("doe-active", widget.length > 0 ? widget : undefined, { placement: "aboveEditor" });
 		runtime.liveView.requestRender();
@@ -191,9 +193,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 	async function restoreState(ctx: ExtensionContext) {
 		const activeRuntime = getRuntime();
 		activeRuntime.registry.restore(latestSnapshot(ctx));
-		const recoverableAgents = activeRuntime.registry
-			.listAgents({ includeCompleted: true })
-			.filter((agent) => agent.threadId && (agent.state === "working" || agent.state === "awaiting_input"));
+		const recoverableAgents = activeRuntime.registry.listRecoverableAgents();
 		if (recoverableAgents.length === 0) return;
 		await activeRuntime.client.ensureStarted();
 		for (const agent of recoverableAgents) {

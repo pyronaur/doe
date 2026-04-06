@@ -65,6 +65,21 @@ function makeQueryExcerpt(text: string, query: string, maxChars = 260): string {
 	return `${prefix}${excerpt}${suffix}`;
 }
 
+function resolveInspectTarget(registry: DoeRegistry, params: any) {
+	if (params.ic) {
+		const active = registry.findActiveSeatAgent(params.ic);
+		if (active) return active;
+		const finished = registry.findLastFinishedSeatAgent(params.ic);
+		if (finished) return finished;
+		if (registry.findSeat(params.ic)) {
+			throw new Error(`${params.ic} has no recorded assignment to inspect.`);
+		}
+	}
+	if (params.agentId) return registry.findAgent(params.agentId);
+	if (params.threadId) return registry.findAgent(params.threadId);
+	return undefined;
+}
+
 export function registerInspectTool(
 	pi: ExtensionAPI,
 	deps: { registry: DoeRegistry; client: CodexAppServerClient },
@@ -74,9 +89,10 @@ export function registerInspectTool(
 	pi.registerTool({
 		name: "codex_inspect",
 		label: "Codex Inspect",
-		description: "Inspect a Codex workstream. Default action=index returns an overview; explicit actions provide files, query, transcript, or raw debug data.",
-		promptSnippet: "Inspect a specific Codex workstream. Default action=index gives an overview; use files, query, transcript, or raw only for explicit follow-up lookups.",
+		description: "Inspect a named DOE IC assignment. Default action=index returns an overview; explicit actions provide files, query, transcript, or raw debug data.",
+		promptSnippet: "Inspect a specific DOE IC assignment. Default action=index gives an overview; use files, query, transcript, or raw only for explicit follow-up lookups.",
 		promptGuidelines: [
+			"Prefer ic for named-seat lookup. agentId and threadId remain available for legacy/debug use.",
 			"Default action is index. Use it for a workstream overview, not to read a normal completed-worker result.",
 			"Do not use inspect as a polling loop. Wait for the worker to finish, or retry later with force=true only when the user explicitly asked for a live check.",
 			"Use action=files for changed-file and LOC lookup.",
@@ -85,6 +101,7 @@ export function registerInspectTool(
 			"Returns threadId — use this when codex_resume needs a threadId instead of agentId.",
 		],
 		parameters: Type.Object({
+			ic: Type.Optional(Type.String()),
 			agentId: Type.Optional(Type.String()),
 			threadId: Type.Optional(Type.String()),
 			action: Type.Optional(ActionSchema),
@@ -93,7 +110,7 @@ export function registerInspectTool(
 			force: Type.Optional(Type.Boolean()),
 		}),
 		renderCall(args, theme) {
-			const target = (args as any).agentId ?? (args as any).threadId ?? "thread";
+			const target = (args as any).ic ?? (args as any).agentId ?? (args as any).threadId ?? "thread";
 			const action = (args as any).action ?? "index";
 			return new Text(theme.fg("accent", `codex_inspect ${target} action=${action}`), 0, 0);
 		},
@@ -101,12 +118,8 @@ export function registerInspectTool(
 			return new Text(theme.fg("accent", "codex_inspect") + "\n" + (result.content?.[0]?.text ?? ""), 0, 0);
 		},
 		async execute(_toolCallId, params) {
-			const agent = params.agentId
-				? deps.registry.findAgent(params.agentId)
-				: params.threadId
-					? deps.registry.findAgent(params.threadId)
-					: undefined;
-			if (!agent?.threadId) throw new Error("Unknown agent/thread.");
+			const agent = resolveInspectTarget(deps.registry, params);
+			if (!agent?.threadId) throw new Error("Unknown IC/agent/thread.");
 
 			if ((agent.state === "working" || agent.state === "awaiting_input") && !params.force) {
 				const lastInspectAt = recentActiveInspects.get(agent.id) ?? 0;
@@ -123,15 +136,15 @@ export function registerInspectTool(
 			const files = extractThreadFileChanges(thread);
 			const queryEntries = extractThreadQueryEntries(thread);
 			const baseLines = [
-				`id: ${agent.id}`,
-				`thread: ${agent.threadId}`,
-				`name: ${agent.name}`,
+				`ic: ${agent.seatName ?? agent.name}`,
 				`state: ${agent.state}`,
 				`model: ${agent.model}`,
 				`context: ${formatUsageCompact(agent.usage)}`,
 				...(formatCompactionSignal(agent.compaction) ? [`context_status: ${formatCompactionSignal(agent.compaction)}`] : []),
 				`mode: ${agent.allowWrite ? "write" : "read-only"}`,
 				`cwd: ${agent.cwd}`,
+				`agentId: ${agent.id}`,
+				`threadId: ${agent.threadId}`,
 				`turns: ${(thread.turns ?? []).length}`,
 				`messages: ${extractThreadMessages(thread).length}`,
 			];

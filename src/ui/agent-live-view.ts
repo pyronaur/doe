@@ -4,6 +4,7 @@ import { extractThreadTranscript, truncateForDisplay } from "../codex/client.js"
 import { formatCompactionSignal, formatUsageBreakdown, formatUsageCompact } from "../context-usage.js";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import type { AgentRecord, DoeRegistry } from "../state/registry.js";
+import { ROSTER_BUCKET_LABELS, ROSTER_BUCKET_ORDER } from "../state/registry.js";
 
 type ViewMode = "list" | "detail";
 
@@ -15,20 +16,6 @@ interface AgentLiveViewOptions {
 	requestRender: () => void;
 	initialMode?: ViewMode;
 	initialAgentId?: string | null;
-}
-
-function stateRank(agent: AgentRecord): number {
-	if (agent.state === "working") return 0;
-	if (agent.state === "awaiting_input") return 1;
-	return 2;
-}
-
-function sortAgents(agents: AgentRecord[]): AgentRecord[] {
-	return [...agents].sort((a, b) => {
-		const rankDiff = stateRank(a) - stateRank(b);
-		if (rankDiff !== 0) return rankDiff;
-		return b.startedAt - a.startedAt;
-	});
 }
 
 function wrapText(text: string, width: number): string[] {
@@ -90,12 +77,6 @@ function agentMeta(agent: AgentRecord): string {
 	return `${state} | ${agent.model} | ${formatElapsed(agent.startedAt, agent.completedAt)} | ${formatUsageCompact(agent.usage)}${compaction ? ` | ${compaction}` : ""}`;
 }
 
-function sectionLabel(agent: AgentRecord): string {
-	if (agent.state === "working") return "ACTIVE";
-	if (agent.state === "awaiting_input") return "AWAITING INPUT";
-	return "RECENT";
-}
-
 class AgentLiveViewComponent {
 	private readonly registry: DoeRegistry;
 	private readonly client: CodexAppServerClient;
@@ -145,7 +126,7 @@ class AgentLiveViewComponent {
 	dispose(): void {}
 
 	private getAgents(): AgentRecord[] {
-		return sortAgents(this.registry.listAgents({ includeCompleted: true }));
+		return this.registry.listRosterAssignments().map((entry) => entry.agent);
 	}
 
 	private getInitialSelection(): string | null {
@@ -310,9 +291,9 @@ class AgentLiveViewComponent {
 		const agents = this.ensureSelection();
 		const body: string[] = [];
 		if (agents.length === 0) {
-			body.push(this.theme.fg("dim", " No agents yet"));
+			body.push(this.theme.fg("dim", " No active ICs"));
 			body.push(this.theme.fg("dim", " Use codex_spawn to delegate work"));
-			return this.renderFrame("DoE Live Monitor", width, body);
+			return this.renderFrame("DoE Active Roster", width, body);
 		}
 
 		const selectedId = this.selectedAgentId;
@@ -320,24 +301,21 @@ class AgentLiveViewComponent {
 		const pageSize = listViewportSize();
 		const pageStart = Math.max(0, Math.min(selectedIndex, Math.max(0, agents.length - pageSize)));
 		const page = agents.slice(pageStart, pageStart + pageSize);
-		const activeCount = agents.filter((agent) => agent.state === "working").length;
-		const waitingCount = agents.filter((agent) => agent.state === "awaiting_input").length;
-		const recentCount = Math.max(0, agents.length - activeCount - waitingCount);
+		const summaries = this.registry.getRosterBucketSummaries();
 
-		body.push(this.theme.fg("accent", ` Active ${activeCount} | Awaiting ${waitingCount} | Recent ${recentCount}`));
+		body.push(this.theme.fg("accent", ` Active Working ICs ${agents.length}`));
+		for (const bucket of ROSTER_BUCKET_ORDER) {
+			const summary = summaries.find((entry) => entry.bucket === bucket);
+			if (!summary || summary.activeCount === 0) continue;
+			body.push(this.theme.fg("muted", ` ${ROSTER_BUCKET_LABELS[bucket]}: ${summary.names.join(", ")}`));
+		}
 		body.push(this.theme.fg("muted", " Up/Down move | Enter detail | Esc close"));
 		body.push("");
 
-		let lastSection: string | null = null;
 		for (const [offset, agent] of page.entries()) {
 			const absoluteIndex = pageStart + offset;
 			const selected = agent.id === selectedId;
 			const marker = selected ? this.theme.fg("accent", "›") : " ";
-			const section = sectionLabel(agent);
-			if (section !== lastSection) {
-				body.push(this.theme.fg("warning", ` ${section}`));
-				lastSection = section;
-			}
 			const title = truncateToWidth(`${absoluteIndex + 1}. ${agent.name}`, inner - 2);
 			const meta = truncateToWidth(agentMeta(agent), inner - 2);
 			const preview = truncateToWidth(truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, inner - 6) || "(no transcript yet)", inner - 2);
@@ -347,7 +325,7 @@ class AgentLiveViewComponent {
 			if (absoluteIndex < agents.length - 1) body.push(this.theme.fg("border", "─".repeat(Math.max(0, inner - 1))));
 		}
 
-		return this.renderFrame("DoE Live Monitor", width, body);
+		return this.renderFrame("DoE Active Roster", width, body);
 	}
 
 	private buildDetailBodyLines(agent: AgentRecord, width: number): string[] {
@@ -390,7 +368,7 @@ class AgentLiveViewComponent {
 		}
 
 		const body: string[] = [];
-		body.push(this.theme.fg("accent", ` ${agent.name}`));
+		body.push(this.theme.fg("accent", ` ${agent.seatName ?? agent.name}`));
 		body.push(` ${agent.activityLabel ?? agent.state} | ${agent.model} | ${agent.allowWrite ? "write" : "read-only"}`);
 		body.push(` cwd: ${truncateForDisplay(agent.cwd, inner - 6)}`);
 		body.push(` started: ${formatTimestamp(agent.startedAt)} | completed: ${formatTimestamp(agent.completedAt ?? null)}`);
@@ -411,7 +389,7 @@ class AgentLiveViewComponent {
 			body.push(this.theme.fg("muted", ` ${Math.min(start + viewport, contentLines.length)}/${contentLines.length}`));
 		}
 
-		return this.renderFrame("Agent Detail", width, body);
+		return this.renderFrame("IC Detail", width, body);
 	}
 }
 

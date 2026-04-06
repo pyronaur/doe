@@ -29,10 +29,13 @@
 - If unsure: spawn first worker, wait, then decide
 
 ## When to spawn fresh vs. resume
-- Same investigation or vertical slice → resume
+- Same investigation or vertical slice on the same IC seat → resume
 - Missing details from a research result → follow up in the same thread
-- Different task, scope, or dependencies → spawn fresh
+- Different task, scope, or dependencies on the same seat → spawn fresh
+- Fresh spawn on the same seat creates a new thread. Seat identity alone does not carry over prior thread memory.
 - Do not spawn multiple research agents for the same question
+- Do not silently reopen finished work. Use `reuseFinished=true` only when DOE explicitly wants the last finished seat context.
+- If a seat is occupied and non-running, finish it intentionally with `codex_finalize` when the seat should be released.
 
 ## Tool choice after worker completion
 - After `codex_spawn` or `codex_resume`, use the returned `content` as the worker's result.

@@ -34,8 +34,8 @@ function buildPrompt(
 	}
 	const docs = loadMarkdownDocs(templatesDir);
 	const doc = docs.find((entry) => entry.name === params.template);
-	if (!doc) throw new Error(`Unknown template \"${params.template}\".`);
-	const defaultModel = readOptionalModelId(doc.attributes.default_model, `template \"${doc.name}\" default_model`);
+	if (!doc) throw new Error(`Unknown template "${params.template}".`);
+	const defaultModel = readOptionalModelId(doc.attributes.default_model, `template "${doc.name}" default_model`);
 	const defaultEffort = doc.attributes.default_effort;
 	if (defaultEffort !== "low" && defaultEffort !== "medium" && defaultEffort !== "high" && defaultEffort !== "xhigh") {
 		throw new Error(`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`);
@@ -50,22 +50,43 @@ function buildPrompt(
 	};
 }
 
+function resolveResumeTarget(registry: DoeRegistry, params: any) {
+	if (params.ic) {
+		const active = registry.findActiveSeatAgent(params.ic);
+		if (active) return active;
+		if (params.reuseFinished) {
+			const finished = registry.findLastFinishedSeatAgent(params.ic);
+			if (finished) return finished;
+		}
+		if (registry.findSeat(params.ic)) {
+			throw new Error(`No active assignment is attached to ${params.ic}. Use codex_spawn for fresh work on that seat, or set reuseFinished=true to reopen the last finished context.`);
+		}
+	}
+	if (params.agentId) return registry.findAgent(params.agentId);
+	if (params.threadId) return registry.findAgent(params.threadId);
+	return undefined;
+}
+
 export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 	pi.registerTool({
 		name: "codex_resume",
 		label: "Codex Resume",
-		description: "Resume or steer an existing Codex thread by agentId or threadId.",
+		description: "Resume or steer an existing Codex thread by IC seat, agentId, or threadId.",
 		promptSnippet: "Resume an existing thread instead of spawning fresh when the work continues the same investigation or task.",
 		promptGuidelines: [
-			"Requires agentId (available from codex_list) or threadId (available from codex_inspect).",
+			"Prefer ic for named-seat lookup. agentId and threadId remain available for legacy/debug use.",
+			"Use reuseFinished=true only when DOE explicitly wants the last finished context on that seat.",
+			"Do not resume a finished unrelated task just because the seat name matches. Spawn fresh work on that seat instead.",
 			"Does not accept tasks[], name, cwd, or batchName.",
 			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
 			"Keep read-only unless this is explicit implementation work — set allowWrite=true only then.",
 			"Waits for the worker to finish before returning and returns the worker's full final answer in content. Use that returned content directly as the worker result.",
 		],
 		parameters: Type.Object({
+			ic: Type.Optional(Type.String()),
 			agentId: Type.Optional(Type.String()),
 			threadId: Type.Optional(Type.String()),
+			reuseFinished: Type.Optional(Type.Boolean()),
 			prompt: Type.String(),
 			model: Type.Optional(Type.String()),
 			effort: Type.Optional(EffortSchema),
@@ -76,7 +97,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			allowWrite: Type.Optional(Type.Boolean()),
 		}),
 		renderCall(args, theme) {
-			return new Text(theme.fg("accent", `codex_resume ${(args as any).agentId ?? (args as any).threadId ?? "thread"}`), 0, 0);
+			return new Text(theme.fg("accent", `codex_resume ${(args as any).ic ?? (args as any).agentId ?? (args as any).threadId ?? "thread"}`), 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			const agent = (result as any).details?.agent;
@@ -84,13 +105,9 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			return new Text(theme.fg("accent", preview), 0, 0);
 		},
 		async execute(_toolCallId, params, signal) {
-			const agent = params.agentId
-				? deps.registry.findAgent(params.agentId)
-				: params.threadId
-					? deps.registry.findAgent(params.threadId)
-					: undefined;
+			const agent = resolveResumeTarget(deps.registry, params);
 			if (!agent?.threadId) {
-				throw new Error("Unknown agent/thread. Provide an existing agentId or threadId from codex_list/codex_inspect.");
+				throw new Error("Unknown IC/agent/thread. Provide an active seat name, or an existing agentId/threadId from codex_list/codex_inspect.");
 			}
 
 			const notificationMode = (agent.notificationMode ?? "notify_each") as NotificationMode;
@@ -162,7 +179,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				text = extractLastCompletedAgentMessage(threadResponse.thread);
 			}
 			return {
-				content: [{ type: "text", text: [`name: ${finalAgent.name}`, `state: ${finalAgent.state}`, `context: ${formatUsageCompact(finalAgent.usage)}`, ...(formatCompactionSignal(finalAgent.compaction) ? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`] : []), "", text ?? "Completed"].join("\n") }],
+				content: [{ type: "text", text: [`ic: ${finalAgent.name}`, `state: ${finalAgent.state}`, `context: ${formatUsageCompact(finalAgent.usage)}`, ...(formatCompactionSignal(finalAgent.compaction) ? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`] : []), "", text ?? "Completed"].join("\n") }],
 				details: { agent: finalAgent },
 			};
 		},
