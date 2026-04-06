@@ -16,18 +16,30 @@ interface ResumeToolDeps {
 	templatesDir: string;
 }
 
-function buildPrompt(params: any, templatesDir: string): { templateName: string | null; prompt: string } {
+function buildPrompt(
+	params: any,
+	templatesDir: string,
+): { templateName: string | null; prompt: string; templateDefaultModel: string | null; templateDefaultEffort: ReasoningEffort | null } {
 	if (!params.template) {
-		return { templateName: null, prompt: params.prompt };
+		return { templateName: null, prompt: params.prompt, templateDefaultModel: null, templateDefaultEffort: null };
 	}
 	const docs = loadMarkdownDocs(templatesDir);
 	const doc = docs.find((entry) => entry.name === params.template);
 	if (!doc) throw new Error(`Unknown template \"${params.template}\".`);
+	const defaultModel = typeof doc.attributes.default_model === "string" && doc.attributes.default_model.trim()
+		? doc.attributes.default_model.trim()
+		: null;
+	const defaultEffort = doc.attributes.default_effort;
+	if (defaultEffort !== "low" && defaultEffort !== "medium" && defaultEffort !== "high" && defaultEffort !== "xhigh") {
+		throw new Error(`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`);
+	}
 	const usesTaskPlaceholder = doc.body.includes("{{task}}");
 	const rendered = renderMarkdownTemplate(doc, { task: params.prompt, ...(params.templateVariables ?? {}) }).trim();
 	return {
 		templateName: doc.name,
 		prompt: usesTaskPlaceholder || !params.prompt ? rendered : `${rendered}\n\n# Task\n${params.prompt}`,
+		templateDefaultModel: defaultModel,
+		templateDefaultEffort: defaultEffort,
 	};
 }
 
@@ -35,13 +47,13 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 	pi.registerTool({
 		name: "codex_resume",
 		label: "Codex Resume",
-		description: "Resume or steer an existing Codex workstream.",
-		promptSnippet: "Resume a related Codex thread instead of spawning a fresh one when the workstream is still relevant.",
+		description: "Resume or steer an existing Codex thread by agentId or threadId.",
+		promptSnippet: "Resume an existing thread instead of spawning fresh when the work continues the same investigation or task.",
 		promptGuidelines: [
-			"Use this when continuing related work on an existing thread.",
-			"If the request is unrelated, prefer codex_spawn for a fresh thread.",
-			"This tool waits for the resumed worker to finish before returning.",
-			"Keep the thread read-only unless this is explicit implementation work.",
+			"Requires agentId (available from codex_list) or threadId (available from codex_inspect).",
+			"Does not accept tasks[], name, cwd, or batchName.",
+			"Keep read-only unless this is explicit implementation work — set allowWrite=true only then.",
+			"Waits for the worker to finish before returning. Returns a text summary and a details.agent record.",
 		],
 		parameters: Type.Object({
 			agentId: Type.Optional(Type.String()),
@@ -73,11 +85,11 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 
 			const notificationMode = (agent.notificationMode ?? "notify_each") as NotificationMode;
 			const returnMode = "wait" as const;
-			const effort = (params.effort ?? agent.effort ?? "medium") as ReasoningEffort;
-			const model = params.model ?? agent.model;
 			const approvalPolicy = (params.approvalPolicy ?? "never") as ApprovalPolicy;
 			const networkAccess = params.networkAccess ?? false;
-			const { templateName, prompt } = buildPrompt(params, deps.templatesDir);
+			const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(params, deps.templatesDir);
+			const effort = (params.effort ?? templateDefaultEffort ?? agent.effort ?? "medium") as ReasoningEffort;
+			const model = params.model ?? templateDefaultModel ?? agent.model;
 			const allowWrite = params.allowWrite ?? ((templateName ?? params.template ?? agent.template ?? null) === "implement" ? true : (agent.allowWrite ?? false));
 
 			deps.registry.upsertAgent({

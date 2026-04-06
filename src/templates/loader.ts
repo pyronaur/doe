@@ -119,7 +119,8 @@ export function summarizeTemplates(docs: MarkdownDoc[]): string {
 					? doc.attributes.when_to_use
 					: "no extra guidance";
 			const model = typeof doc.attributes.default_model === "string" ? doc.attributes.default_model : "inherit";
-			return `- ${doc.name}: purpose=${purpose}; default_model=${model}; when_to_use=${whenToUse}`;
+			const effort = typeof doc.attributes.default_effort === "string" ? doc.attributes.default_effort : "inherit";
+			return `- ${doc.name}: purpose=${purpose}; default_model=${model}; default_effort=${effort}; when_to_use=${whenToUse}`;
 		})
 		.join("\n");
 }

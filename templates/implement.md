@@ -4,7 +4,8 @@ when_to_use:
   - Need code changes made
   - Need tests updated
   - Need a concrete implementation result
-default_model: gpt-5.4-high
+default_model: gpt-5.4
+default_effort: high
 ---
 You are an implementation worker.
 

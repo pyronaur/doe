@@ -50,11 +50,16 @@ function inferName(prompt: string): string {
 	return words.join(" ") || "delegate";
 }
 
-function buildPrompt(task: any, templatesDir: string): { templateName: string | null; prompt: string } {
+function buildPrompt(
+	task: any,
+	templatesDir: string,
+): { templateName: string | null; prompt: string; templateDefaultModel: string | null; templateDefaultEffort: ReasoningEffort | null } {
 	if (!task.template) {
 		return {
 			templateName: null,
 			prompt: task.prompt,
+			templateDefaultModel: null,
+			templateDefaultEffort: null,
 		};
 	}
 
@@ -62,6 +67,13 @@ function buildPrompt(task: any, templatesDir: string): { templateName: string | 
 	const doc = docs.find((entry) => entry.name === task.template);
 	if (!doc) {
 		throw new Error(`Unknown template "${task.template}". Available: ${docs.map((entry) => entry.name).join(", ") || "none"}`);
+	}
+	const defaultModel = typeof doc.attributes.default_model === "string" && doc.attributes.default_model.trim()
+		? doc.attributes.default_model.trim()
+		: null;
+	const defaultEffort = doc.attributes.default_effort;
+	if (defaultEffort !== "low" && defaultEffort !== "medium" && defaultEffort !== "high" && defaultEffort !== "xhigh") {
+		throw new Error(`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`);
 	}
 	const usesTaskPlaceholder = doc.body.includes("{{task}}");
 	const variables = {
@@ -77,6 +89,8 @@ function buildPrompt(task: any, templatesDir: string): { templateName: string | 
 	return {
 		templateName: doc.name,
 		prompt: rendered,
+		templateDefaultModel: defaultModel,
+		templateDefaultEffort: defaultEffort,
 	};
 }
 
@@ -154,12 +168,12 @@ async function executeSpawnLike(
 	for (const rawTask of tasks) {
 		index += 1;
 		const cwd = rawTask.cwd ?? process.cwd();
-		const model = rawTask.model ?? "gpt-5.4-mini";
-		const effort = (rawTask.effort ?? "medium") as ReasoningEffort;
 		const approvalPolicy = (rawTask.approvalPolicy ?? "never") as ApprovalPolicy;
 		const networkAccess = rawTask.networkAccess ?? false;
 		const name = rawTask.name?.trim() || inferName(rawTask.prompt);
-		const { templateName, prompt } = buildPrompt(rawTask, deps.templatesDir);
+		const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir);
+		const model = rawTask.model ?? templateDefaultModel ?? "gpt-5.4-mini";
+		const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
 		const allowWrite = inferAllowWrite(rawTask, templateName);
 		const agentId = seededAgentIds[index - 1]!;
 
@@ -238,13 +252,13 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 	pi.registerTool({
 		name: "codex_spawn",
 		label: "Codex Spawn",
-		description: "Spawn one or more Codex workstreams through the Codex app-server.",
-		promptSnippet: "Spawn one or more Codex sub-agents for scanning, research, planning, or implementation work.",
+		description: "Spawn one or more Codex workstreams. Each task gets its own thread. Tasks in tasks[] run as a batch.",
+		promptSnippet: "Spawn new Codex workers for scanning, research, planning, or implementation. Use tasks[] for parallel independent work.",
 		promptGuidelines: [
-			"Use this tool instead of researching or coding directly.",
-			"Pass multiple tasks in tasks[] when you want parallel workers.",
-			"This tool waits for worker completion and returns the results in the same turn.",
-			"Workers are read-only by default. Only set allowWrite=true or use template=implement for explicit implementation work.",
+			"Use for new work only. Do not use when an existing thread has relevant context — use codex_resume instead.",
+			"Pass multiple tasks in tasks[] when the questions are independent. Each task gets its own thread.",
+			"Workers are read-only by default. Set allowWrite=true per task, or use template=implement which enables write automatically.",
+			"Waits for all workers to complete before returning. Returns a text summary and a details.agents[] array.",
 		],
 		parameters: SpawnParametersSchema,
 		prepareArguments: normalizeMultiTaskArgs,
@@ -268,12 +282,9 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 	pi.registerTool({
 		name: "codex_delegate",
 		label: "Codex Delegate",
-		description: "Alias for codex_spawn with the same parameters.",
-		promptSnippet: "Alias of codex_spawn for delegation-oriented language.",
-		promptGuidelines: [
-			"Use this for new delegated research, planning, or implementation tasks.",
-			"This tool waits for completion and returns the worker results in the same turn.",
-		],
+		description: "Alias for codex_spawn.",
+		promptSnippet: "Alias of codex_spawn — identical behavior.",
+		promptGuidelines: ["Use codex_spawn instead. Both tools are identical."],
 		parameters: SpawnParametersSchema,
 		prepareArguments: normalizeMultiTaskArgs,
 		renderCall(args, theme) {
