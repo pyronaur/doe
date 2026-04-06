@@ -34,6 +34,15 @@
 - Different task, scope, or dependencies → spawn fresh
 - Do not spawn multiple research agents for the same question
 
+## Tool choice after worker completion
+- After `codex_spawn` or `codex_resume`, use the returned `content` as the worker's result.
+- Do not call `codex_inspect` just to read a completed worker's answer.
+- Use `codex_inspect` only when you need follow-up lookup beyond the returned worker result.
+- `codex_inspect(action="index")` → workstream overview, state, previews, touched files.
+- `codex_inspect(action="files")` → changed-file and LOC lookup.
+- `codex_inspect(action="query", query="...")` → targeted thread-history lookup.
+- `codex_inspect(action="transcript")` or `action="raw"` → explicit transcript/debug needs only.
+
 ## Agent promotion
 - Research agents start read-only
 - After output is validated: upgrade model if needed, grant write to a specific path, instruct agent to store output there

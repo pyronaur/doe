@@ -133,6 +133,19 @@ function summarizeAgents(agents: Array<any>, maxSnippet = 120): string {
 		.join("\n");
 }
 
+function resolveAgentFinalOutput(agent: any): string {
+	const lastAgentMessage = [...(agent?.messages ?? [])]
+		.reverse()
+		.find((message: any) => message?.role === "agent" && typeof message?.text === "string" && message.text.trim().length > 0)?.text;
+	return agent?.latestFinalOutput ?? lastAgentMessage ?? agent?.latestSnippet ?? "Completed";
+}
+
+function formatBatchOutputs(agents: Array<any>): string {
+	return agents
+		.map((agent, index) => [`## ${index + 1}. ${agent.name}`, resolveAgentFinalOutput(agent)].join("\n\n"))
+		.join("\n\n---\n\n");
+}
+
 function inferAllowWrite(task: { template?: string | null; allowWrite?: boolean }, templateName: string | null): boolean {
 	if (typeof task.allowWrite === "boolean") return task.allowWrite;
 	return (templateName ?? task.template ?? null) === "implement";
@@ -162,7 +175,6 @@ async function executeSpawnLike(
 		});
 	}
 
-	const createdAgents: any[] = [];
 	let index = 0;
 	for (const rawTask of tasks) {
 		index += 1;
@@ -230,19 +242,14 @@ async function executeSpawnLike(
 		deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id, activeTurnId: turn.turn.id });
 		deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
 		deps.registry.appendUserMessage(agentId, turn.turn.id, prompt);
-		createdAgents.push(deps.registry.getAgent(agentId));
 	}
 
 	const finalAgents = batchId
 		? await deps.registry.waitForBatch(batchId, signal)
 		: [await deps.registry.waitForAgent(agentIds[0]!, signal)];
+	const text = batchId ? formatBatchOutputs(finalAgents) : resolveAgentFinalOutput(finalAgents[0]);
 	return {
-		content: [
-			{
-				type: "text",
-				text: [`All delegated work completed for ${batchName}.`, summarizeAgents(finalAgents, 96) || "Completed", "Answer the user now using these results."].join("\n"),
-			},
-		],
+		content: [{ type: "text", text }],
 		details: {
 			batchId,
 			batchName,
@@ -262,7 +269,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			"Pass multiple tasks in tasks[] when the questions are independent. Each task gets its own thread.",
 			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
 			"Workers are read-only by default. Set allowWrite=true per task, or use template=implement which enables write automatically.",
-			"Waits for all workers to complete before returning. Returns a text summary and a details.agents[] array.",
+			"Waits for workers to complete and returns each worker's full final answer in content. Use that returned content directly as the worker result.",
 		],
 		parameters: SpawnParametersSchema,
 		prepareArguments: normalizeMultiTaskArgs,

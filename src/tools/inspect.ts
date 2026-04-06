@@ -3,11 +3,18 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { extractThreadMessages, extractTurnMessages, truncateForDisplay } from "../codex/client.js";
+import {
+	extractThreadFileChanges,
+	extractThreadMessages,
+	extractThreadQueryEntries,
+	extractTurnMessages,
+	truncateForDisplay,
+} from "../codex/client.js";
 import type { DoeRegistry } from "../state/registry.js";
 
-const HistorySchema = StringEnum(["summary", "first_last", "transcript", "full", "raw"] as const);
+const ActionSchema = StringEnum(["index", "files", "query", "transcript", "raw"] as const);
 const MESSAGE_BLOCK_MAX_CHARS = 4_000;
+const QUERY_MATCH_LIMIT = 8;
 const ACTIVE_INSPECT_COOLDOWN_MS = 15_000;
 
 function formatMessageBlock(text: string | null | undefined, maxChars = MESSAGE_BLOCK_MAX_CHARS): string {
@@ -29,6 +36,34 @@ function renderTranscript(thread: any): string {
 		.join("\n\n");
 }
 
+function formatFileStatLine(file: { path: string; addedLines: number | null; removedLines: number | null; changes: number }): string {
+	const stats =
+		file.addedLines !== null || file.removedLines !== null
+			? `+${file.addedLines ?? "?"}/-${file.removedLines ?? "?"}`
+			: "stats=unavailable";
+	return `- ${file.path} | ${stats} | changes=${file.changes}`;
+}
+
+function formatIndexFileSummary(files: Array<{ path: string; addedLines: number | null; removedLines: number | null; changes: number }>): string[] {
+	if (files.length === 0) return ["(no fileChange items found)"];
+	const lines = files.slice(0, 8).map(formatFileStatLine);
+	if (files.length > 8) lines.push(`... +${files.length - 8} more`);
+	return lines;
+}
+
+function makeQueryExcerpt(text: string, query: string, maxChars = 260): string {
+	const haystack = text.toLowerCase();
+	const needle = query.toLowerCase();
+	const index = haystack.indexOf(needle);
+	if (index < 0) return formatMessageBlock(text, maxChars);
+	const start = Math.max(0, index - Math.floor((maxChars - needle.length) / 2));
+	const end = Math.min(text.length, start + maxChars);
+	const excerpt = text.slice(start, end).trim();
+	const prefix = start > 0 ? "…" : "";
+	const suffix = end < text.length ? "…" : "";
+	return `${prefix}${excerpt}${suffix}`;
+}
+
 export function registerInspectTool(
 	pi: ExtensionAPI,
 	deps: { registry: DoeRegistry; client: CodexAppServerClient },
@@ -38,22 +73,28 @@ export function registerInspectTool(
 	pi.registerTool({
 		name: "codex_inspect",
 		label: "Codex Inspect",
-		description: "Inspect a Codex workstream — prompt, output, and thread history.",
-		promptSnippet: "Inspect a specific worker to read its output or get its threadId.",
+		description: "Inspect a Codex workstream. Default action=index returns an overview; explicit actions provide files, query, transcript, or raw debug data.",
+		promptSnippet: "Inspect a specific Codex workstream. Default action=index gives an overview; use files, query, transcript, or raw only for explicit follow-up lookups.",
 		promptGuidelines: [
-			"Use for one-off lookups before deciding next steps. Do not use as a polling loop.",
-			"Use history=first_last or history=transcript for readable output.",
-			"Use history=raw only for debugging — keep raw output out of conversational responses.",
+			"Default action is index. Use it for a workstream overview, not to read a normal completed-worker result.",
+			"Do not use inspect as a polling loop. Wait for the worker to finish, or retry later with force=true only when the user explicitly asked for a live check.",
+			"Use action=files for changed-file and LOC lookup.",
+			"Use action=query for targeted thread-history lookup with a query string.",
+			"Use action=transcript or action=raw only when you explicitly need transcript/debug data.",
 			"Returns threadId — use this when codex_resume needs a threadId instead of agentId.",
 		],
 		parameters: Type.Object({
 			agentId: Type.Optional(Type.String()),
 			threadId: Type.Optional(Type.String()),
-			history: Type.Optional(HistorySchema),
+			action: Type.Optional(ActionSchema),
+			query: Type.Optional(Type.String()),
+			limit: Type.Optional(Type.Number({ minimum: 1, maximum: 50 })),
 			force: Type.Optional(Type.Boolean()),
 		}),
 		renderCall(args, theme) {
-			return new Text(theme.fg("accent", `codex_inspect ${(args as any).agentId ?? (args as any).threadId ?? "thread"}`), 0, 0);
+			const target = (args as any).agentId ?? (args as any).threadId ?? "thread";
+			const action = (args as any).action ?? "index";
+			return new Text(theme.fg("accent", `codex_inspect ${target} action=${action}`), 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			return new Text(theme.fg("accent", "codex_inspect") + "\n" + (result.content?.[0]?.text ?? ""), 0, 0);
@@ -66,7 +107,6 @@ export function registerInspectTool(
 					: undefined;
 			if (!agent?.threadId) throw new Error("Unknown agent/thread.");
 
-			const history = params.history ?? "first_last";
 			if ((agent.state === "working" || agent.state === "awaiting_input") && !params.force) {
 				const lastInspectAt = recentActiveInspects.get(agent.id) ?? 0;
 				if (Date.now() - lastInspectAt < ACTIVE_INSPECT_COOLDOWN_MS) {
@@ -74,25 +114,14 @@ export function registerInspectTool(
 				}
 				recentActiveInspects.set(agent.id, Date.now());
 			}
-			if (history === "summary") {
-				const text = [
-					`id: ${agent.id}`,
-					`thread: ${agent.threadId}`,
-					`name: ${agent.name}`,
-					`state: ${agent.state}`,
-					`model: ${agent.model}`,
-					`mode: ${agent.allowWrite ? "write" : "read-only"}`,
-					`cwd: ${agent.cwd}`,
-					`latest: ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, 300)}`,
-				].join("\n");
-				return { content: [{ type: "text", text }], details: { agent } };
-			}
 
+			const action = params.action ?? "index";
 			const threadResponse = await deps.client.readThread(agent.threadId, true);
 			const thread = threadResponse.thread;
 			const { firstUserMessage, lastAgentMessage } = extractTurnMessages(thread);
-			const transcript = renderTranscript(thread);
-			const lines = [
+			const files = extractThreadFileChanges(thread);
+			const queryEntries = extractThreadQueryEntries(thread);
+			const baseLines = [
 				`id: ${agent.id}`,
 				`thread: ${agent.threadId}`,
 				`name: ${agent.name}`,
@@ -100,30 +129,95 @@ export function registerInspectTool(
 				`model: ${agent.model}`,
 				`mode: ${agent.allowWrite ? "write" : "read-only"}`,
 				`cwd: ${agent.cwd}`,
-				`latest: ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, 300)}`,
 				`turns: ${(thread.turns ?? []).length}`,
 				`messages: ${extractThreadMessages(thread).length}`,
 			];
 
-			if (history === "first_last") {
-				lines.push(
+			if (action === "index") {
+				const lines = [
+					...baseLines,
+					`latest: ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, 300)}`,
 					"",
 					"first_user:",
-					formatMessageBlock(firstUserMessage),
+					formatMessageBlock(firstUserMessage, 800),
 					"",
-					"last_agent:",
-					formatMessageBlock(lastAgentMessage),
-				);
-			} else {
-				lines.push("", "transcript:", transcript);
-				if (history === "raw") {
-					lines.push("", "[raw thread metadata kept in tool details only]");
-				}
+					"latest_agent:",
+					formatMessageBlock(lastAgentMessage, 800),
+					"",
+					"modified_files:",
+					...formatIndexFileSummary(files),
+					"",
+					"follow_up_actions:",
+					'- action="files" for touched files and LOC stats',
+					'- action="query" with query="..." for targeted history lookup',
+					'- action="transcript" for the full transcript',
+					'- action="raw" for raw thread metadata in details',
+				];
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					details: { agent, thread, files },
+				};
 			}
 
+			if (action === "files") {
+				const lines = [...baseLines, "", "files:"];
+				if (files.length === 0) {
+					lines.push("(no fileChange items found)");
+				} else {
+					for (const file of files) {
+						lines.push(formatFileStatLine(file));
+					}
+				}
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					details: { agent, thread, files },
+				};
+			}
+
+			if (action === "query") {
+				const query = params.query?.trim();
+				if (!query) throw new Error('codex_inspect action="query" requires a non-empty query string.');
+				const limit = params.limit ?? QUERY_MATCH_LIMIT;
+				const matches = queryEntries
+					.filter((entry) => entry.text.toLowerCase().includes(query.toLowerCase()))
+					.slice(0, limit);
+				const lines = [...baseLines, `query: ${query}`, `matches: ${matches.length}`];
+				if (matches.length === 0) {
+					lines.push("", "(no matches)");
+				} else {
+					for (const [index, match] of matches.entries()) {
+						lines.push(
+							"",
+							`## match ${index + 1}`,
+							`turn: ${match.turnId}`,
+							`type: ${match.itemType}`,
+							makeQueryExcerpt(match.text, query),
+						);
+					}
+				}
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					details: { agent, thread, matches, query },
+				};
+			}
+
+			if (action === "transcript") {
+				const lines = [...baseLines, "", "transcript:", renderTranscript(thread)];
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					details: { agent, thread },
+				};
+			}
+
+			const rawLines = [
+				...baseLines,
+				`items: ${queryEntries.length}`,
+				"",
+				"[raw thread metadata kept in tool details only]",
+			];
 			return {
-				content: [{ type: "text", text: lines.join("\n") }],
-				details: { agent, thread },
+				content: [{ type: "text", text: rawLines.join("\n") }],
+				details: { agent, thread, files, queryEntries },
 			};
 		},
 	});

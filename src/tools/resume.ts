@@ -3,7 +3,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
+import { extractLastCompletedAgentMessage, truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
@@ -15,6 +15,13 @@ interface ResumeToolDeps {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
 	templatesDir: string;
+}
+
+function resolveAgentFinalOutput(agent: any): string | null {
+	const lastAgentMessage = [...(agent?.messages ?? [])]
+		.reverse()
+		.find((message: any) => message?.role === "agent" && typeof message?.text === "string" && message.text.trim().length > 0)?.text;
+	return agent?.latestFinalOutput ?? lastAgentMessage ?? null;
 }
 
 function buildPrompt(
@@ -53,7 +60,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			"Does not accept tasks[], name, cwd, or batchName.",
 			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
 			"Keep read-only unless this is explicit implementation work — set allowWrite=true only then.",
-			"Waits for the worker to finish before returning. Returns a text summary and a details.agent record.",
+			"Waits for the worker to finish before returning and returns the worker's full final answer in content. Use that returned content directly as the worker result.",
 		],
 		parameters: Type.Object({
 			agentId: Type.Optional(Type.String()),
@@ -71,7 +78,9 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			return new Text(theme.fg("accent", `codex_resume ${(args as any).agentId ?? (args as any).threadId ?? "thread"}`), 0, 0);
 		},
 		renderResult(result, _options, theme) {
-			return new Text(theme.fg("accent", result.content?.[0]?.text ?? "Resumed"), 0, 0);
+			const agent = (result as any).details?.agent;
+			const preview = truncateForDisplay(agent?.latestFinalOutput ?? agent?.latestSnippet ?? result.content?.[0]?.text ?? "Resumed", 240);
+			return new Text(theme.fg("accent", preview), 0, 0);
 		},
 		async execute(_toolCallId, params, signal) {
 			const agent = params.agentId
@@ -146,8 +155,13 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			}
 
 			const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
+			let text = resolveAgentFinalOutput(finalAgent);
+			if (!text && finalAgent.threadId) {
+				const threadResponse = await deps.client.readThread(finalAgent.threadId, true);
+				text = extractLastCompletedAgentMessage(threadResponse.thread);
+			}
 			return {
-				content: [{ type: "text", text: truncateForDisplay(finalAgent.latestFinalOutput ?? finalAgent.latestSnippet, 400) || "Completed" }],
+				content: [{ type: "text", text: text ?? "Completed" }],
 				details: { agent: finalAgent },
 			};
 		},
