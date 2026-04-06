@@ -12,6 +12,7 @@ import {
 	serializePlanState,
 	type DoePlanState,
 } from "./src/plan/session-state.js";
+import { dispatchPlannotatorRequest } from "./src/plan/plannotator-request.js";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./src/plan/reminder.js";
 import { DoeRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
 import { AgentLiveViewController } from "./src/ui/agent-live-view.js";
@@ -240,7 +241,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 				settled = true;
 				reject(new Error("Timed out waiting for Plannotator review startup."));
 			}, PLANNOTATOR_TIMEOUT_MS);
-			pi.events.emit(PLANNOTATOR_REQUEST_CHANNEL, {
+			dispatchPlannotatorRequest(pi.events as any, PLANNOTATOR_REQUEST_CHANNEL, {
 				requestId: `doe-${action}-${Date.now()}`,
 				action,
 				payload,
@@ -297,6 +298,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 		updatePlanState(
 			(current) => ({
 				...current,
+				activePlan: result.approved ? null : current.activePlan,
 				pendingReview: null,
 			}),
 			{ flush: true },
