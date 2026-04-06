@@ -12,6 +12,8 @@ interface AgentLiveViewOptions {
 	theme: any;
 	done: (value?: unknown) => void;
 	requestRender: () => void;
+	initialMode?: ViewMode;
+	initialAgentId?: string | null;
 }
 
 function stateRank(agent: AgentRecord): number {
@@ -78,8 +80,7 @@ function listViewportSize(): number {
 }
 
 function detailViewportSize(): number {
-	const rows = process.stdout.rows ?? 32;
-	return Math.max(8, rows - 14);
+	return 12;
 }
 
 function agentMeta(agent: AgentRecord): string {
@@ -113,10 +114,19 @@ class AgentLiveViewComponent {
 		this.theme = options.theme;
 		this.done = options.done;
 		this.requestRender = options.requestRender;
-		this.selectedAgentId = this.getInitialSelection();
+		this.selectedAgentId = options.initialAgentId ?? this.getInitialSelection();
+		if (options.initialMode === "detail" && this.selectedAgentId) {
+			this.mode = "detail";
+			this.detailAgentId = this.selectedAgentId;
+			void this.ensureInitialDetail();
+		}
 	}
 
 	handleInput(data: string): void {
+		if (matchesKey(data, "ctrl+,")) {
+			this.close();
+			return;
+		}
 		if (this.mode === "detail") {
 			this.handleDetailInput(data);
 			return;
@@ -205,6 +215,12 @@ class AgentLiveViewComponent {
 			this.hydratingAgentId = null;
 			this.requestRender();
 		}
+	}
+
+	private async ensureInitialDetail() {
+		const agent = this.detailAgentId ? this.registry.getAgent(this.detailAgentId) : null;
+		if (!agent) return;
+		await this.ensureHistory(agent);
 	}
 
 	private backToList() {
@@ -398,18 +414,33 @@ export class AgentLiveViewController {
 	private handle: any = null;
 	private opened = false;
 	private ticker: ReturnType<typeof setInterval> | null = null;
+	private nextOpen: { mode?: ViewMode; agentId?: string | null } | null = null;
 
 	constructor(
 		private readonly registry: DoeRegistry,
 		private readonly client: CodexAppServerClient,
 	) {}
 
-	toggle(ctx: ExtensionContext) {
+	toggle(ctx: ExtensionContext, nextOpen: { mode?: ViewMode; agentId?: string | null } = {}) {
 		if (this.opened) {
 			this.close();
 			return;
 		}
-		this.open(ctx);
+		this.open(ctx, nextOpen);
+	}
+
+	openList(ctx: ExtensionContext) {
+		if (this.opened) {
+			this.close();
+		}
+		this.open(ctx, { mode: "list" });
+	}
+
+	openAgentDetail(ctx: ExtensionContext, agentId: string) {
+		if (this.opened) {
+			this.close();
+		}
+		this.open(ctx, { mode: "detail", agentId });
 	}
 
 	requestRender() {
@@ -430,8 +461,9 @@ export class AgentLiveViewController {
 		this.opened = false;
 	}
 
-	private open(ctx: ExtensionContext) {
+	private open(ctx: ExtensionContext, nextOpen: { mode?: ViewMode; agentId?: string | null } = {}) {
 		if (!ctx.hasUI || this.opened) return;
+		this.nextOpen = nextOpen;
 		this.opened = true;
 		ctx.ui.custom(
 			(tui, theme, _kb, done) =>
@@ -439,9 +471,12 @@ export class AgentLiveViewController {
 					registry: this.registry,
 					client: this.client,
 					theme,
+					initialMode: this.nextOpen?.mode,
+					initialAgentId: this.nextOpen?.agentId ?? null,
 					done: () => {
 						this.opened = false;
 						this.handle = null;
+						this.nextOpen = null;
 						if (this.ticker) {
 							clearInterval(this.ticker);
 							this.ticker = null;

@@ -15,6 +15,7 @@ import { registerCancelTool } from "./src/tools/cancel.js";
 
 const DOE_FLAG = "doe";
 const TOOL_NAMES = ["codex_spawn", "codex_delegate", "codex_resume", "codex_list", "codex_inspect", "codex_cancel"];
+const DOE_MONITOR_SHORTCUT = "ctrl+,";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = join(__dirname, "prompts");
 const TEMPLATES_DIR = join(__dirname, "templates");
@@ -34,8 +35,15 @@ function formatActiveWidget(registry: DoeRegistry): string[] {
 		`DoE Active Agents (${agents.length})`,
 		"Currently running workstreams:",
 		...agents.map((agent, index) => `${index + 1}. ${agent.name} | ${agent.activityLabel ?? agent.state} | ${formatElapsed(agent.startedAt, agent.completedAt)}`),
-		"Open /doe-sidebar for the live monitor",
+		`${DOE_MONITOR_SHORTCUT} monitor`,
 	];
+}
+
+function primaryActiveAgent(registry: DoeRegistry) {
+	return registry
+		.listAgents({ includeCompleted: false })
+		.find((agent) => agent.state === "working")
+		?? null;
 }
 
 function latestSnapshot(ctx: ExtensionContext): PersistedRegistrySnapshot | null {
@@ -96,16 +104,17 @@ export default function doeExtension(pi: ExtensionAPI) {
 		registerInspectTool(pi, { client, registry });
 		registerCancelTool(pi, { client, registry });
 
-		pi.registerCommand("doe-sidebar", {
-			description: "Open or close the Director of Engineering live agent view",
-			handler: async (_args, commandCtx) => {
-				const activeRuntime = activate(commandCtx);
+		pi.registerShortcut(DOE_MONITOR_SHORTCUT, {
+			description: "Open or close the Director of Engineering live monitor",
+			handler: async (shortcutCtx) => {
+				const activeRuntime = activate(shortcutCtx);
 				if (!activeRuntime) {
-					commandCtx.ui.notify("Director of Engineering mode is off. Start pi with --doe.", "warning");
+					shortcutCtx.ui.notify("Director of Engineering mode is off. Start pi with --doe.", "warning");
 					return;
 				}
-				activeRuntime.latestCtx = commandCtx;
-				activeRuntime.liveView.toggle(commandCtx);
+				activeRuntime.latestCtx = shortcutCtx;
+				const agent = primaryActiveAgent(activeRuntime.registry);
+				activeRuntime.liveView.toggle(shortcutCtx, agent ? { mode: "detail", agentId: agent.id } : { mode: "list" });
 			},
 		});
 
