@@ -10,6 +10,7 @@ import { readOptionalModelId, validateModelId } from "../codex/model-selection.j
 import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
 import type { AssignableRosterBucket, NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
+import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.js";
 import { normalizeSpawnSeatIntent } from "./spawn-seat-intent.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
@@ -194,109 +195,119 @@ async function executeSpawnLike(
 			returnMode,
 		});
 	}
+	const stopProgressUpdates = startToolProgressUpdates({
+		registry: deps.registry,
+		agentIds,
+		onUpdate,
+		baseDetails: {
+			batchId,
+			batchName,
+			partial: true,
+		},
+	});
 
-	let index = 0;
-	for (const rawTask of tasks) {
-		index += 1;
-		const cwd = rawTask.cwd ?? process.cwd();
-		const approvalPolicy = (rawTask.approvalPolicy ?? "never") as ApprovalPolicy;
-		const networkAccess = rawTask.networkAccess ?? false;
-		const taskName = rawTask.name?.trim() || inferName(rawTask.prompt);
-		const sessionSlug = deps.getSessionSlug?.() ?? null;
-		const sharedContext = sessionSlug ? getSharedKnowledgebaseContext(cwd, sessionSlug) : null;
-		const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir, sharedContext);
-		const explicitModel = readOptionalModelId(rawTask.model, "model");
-		const model = validateModelId(explicitModel ?? templateDefaultModel ?? "gpt-5.4-mini", explicitModel ? "model" : "resolved model");
-		const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
-		const allowWrite = inferAllowWrite(rawTask, templateName);
-		const agentId = seededAgentIds[index - 1]!;
-		const seat = deps.registry.assignSeat({
-			agentId,
-			ic: rawTask.ic ?? null,
-			bucket: (rawTask.bucket ?? "mid") as AssignableRosterBucket,
-		});
-
-		deps.registry.upsertAgent({
-			id: agentId,
-			name: seat.name,
-			cwd,
-			model,
-			effort,
-			template: templateName,
-			allowWrite,
-			threadId: null,
-			activeTurnId: null,
-			state: "working",
-			activityLabel: "starting",
-			latestSnippet: `queued: ${truncateForDisplay(prompt, 120)}`,
-			latestFinalOutput: null,
-			lastError: null,
-			usage: null,
-			compaction: null,
-			startedAt: Date.now(),
-			completedAt: null,
-			parentBatchId: batchId,
-			notificationMode,
-			returnMode,
-			completionNotified: false,
-			recovered: false,
-			seatName: seat.name,
-			seatBucket: seat.bucket,
-			seatKind: seat.kind,
-			finishNote: null,
-			reuseSummary: null,
-			messages: [],
-			historyHydratedAt: null,
-		});
-
-		onUpdate?.({
-			content: [{ type: "text", text: `Launching ${seat.name} (${index}/${tasks.length}) for ${taskName}` }],
-			details: { index, total: tasks.length, agentId, ic: seat.name, allowWrite },
-		});
-
-		try {
-			const thread = await deps.client.startThread({
-				model,
-				cwd,
-				approvalPolicy,
-				networkAccess,
-				allowWrite,
+	try {
+		let index = 0;
+		for (const rawTask of tasks) {
+			index += 1;
+			const cwd = rawTask.cwd ?? process.cwd();
+			const approvalPolicy = (rawTask.approvalPolicy ?? "never") as ApprovalPolicy;
+			const networkAccess = rawTask.networkAccess ?? false;
+			const sessionSlug = deps.getSessionSlug?.() ?? null;
+			const sharedContext = sessionSlug ? getSharedKnowledgebaseContext(cwd, sessionSlug) : null;
+			const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir, sharedContext);
+			const explicitModel = readOptionalModelId(rawTask.model, "model");
+			const model = validateModelId(explicitModel ?? templateDefaultModel ?? "gpt-5.4-mini", explicitModel ? "model" : "resolved model");
+			const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
+			const allowWrite = inferAllowWrite(rawTask, templateName);
+			const agentId = seededAgentIds[index - 1]!;
+			const seat = deps.registry.assignSeat({
+				agentId,
+				ic: rawTask.ic ?? null,
+				bucket: (rawTask.bucket ?? "mid") as AssignableRosterBucket,
 			});
-			deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id });
+			const now = Date.now();
 
-			const turn = await deps.client.startTurn({
-				threadId: thread.thread.id,
-				prompt,
+			deps.registry.upsertAgent({
+				id: agentId,
+				name: seat.name,
 				cwd,
 				model,
 				effort,
-				approvalPolicy,
-				networkAccess,
+				template: templateName,
 				allowWrite,
+				threadId: null,
+				activeTurnId: null,
+				state: "working",
+				activityLabel: "starting",
+				latestSnippet: `queued: ${truncateForDisplay(prompt, 120)}`,
+				latestFinalOutput: null,
+				lastError: null,
+				usage: null,
+				compaction: null,
+				startedAt: now,
+				runStartedAt: now,
+				completedAt: null,
+				parentBatchId: batchId,
+				notificationMode,
+				returnMode,
+				completionNotified: false,
+				recovered: false,
+				seatName: seat.name,
+				seatBucket: seat.bucket,
+				seatKind: seat.kind,
+				finishNote: null,
+				reuseSummary: null,
+				messages: [],
+				historyHydratedAt: null,
 			});
-			deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id, activeTurnId: turn.turn.id });
-			deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
-			deps.registry.appendUserMessage(agentId, turn.turn.id, prompt);
-		} catch (error) {
-			deps.registry.markAgentError(agentId, error instanceof Error ? error.message : String(error));
-			throw error;
-		}
-	}
 
-	const finalAgents = batchId
-		? await deps.registry.waitForBatch(batchId, signal)
-		: [await deps.registry.waitForAgent(agentIds[0]!, signal)];
-	const text = batchId
-		? formatBatchOutputs(finalAgents)
-		: [`ic: ${finalAgents[0].name}`, `state: ${finalAgents[0].state}`, `context: ${formatUsageCompact(finalAgents[0].usage)}`, ...(formatCompactionSignal(finalAgents[0].compaction) ? [`context_status: ${formatCompactionSignal(finalAgents[0].compaction)}`] : []), "", resolveAgentFinalOutput(finalAgents[0])].join("\n");
-	return {
-		content: [{ type: "text", text }],
-		details: {
-			batchId,
-			batchName,
-			agents: finalAgents,
-		},
-	};
+			try {
+				const thread = await deps.client.startThread({
+					model,
+					cwd,
+					approvalPolicy,
+					networkAccess,
+					allowWrite,
+				});
+				deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id });
+
+				const turn = await deps.client.startTurn({
+					threadId: thread.thread.id,
+					prompt,
+					cwd,
+					model,
+					effort,
+					approvalPolicy,
+					networkAccess,
+					allowWrite,
+				});
+				deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id, activeTurnId: turn.turn.id });
+				deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
+				deps.registry.appendUserMessage(agentId, turn.turn.id, prompt);
+			} catch (error) {
+				deps.registry.markAgentError(agentId, error instanceof Error ? error.message : String(error));
+				throw error;
+			}
+		}
+
+		const finalAgents = batchId
+			? await deps.registry.waitForBatch(batchId, signal)
+			: [await deps.registry.waitForAgent(agentIds[0]!, signal)];
+		const text = batchId
+			? formatBatchOutputs(finalAgents)
+			: [`ic: ${finalAgents[0].name}`, `state: ${finalAgents[0].state}`, `context: ${formatUsageCompact(finalAgents[0].usage)}`, ...(formatCompactionSignal(finalAgents[0].compaction) ? [`context_status: ${formatCompactionSignal(finalAgents[0].compaction)}`] : []), "", resolveAgentFinalOutput(finalAgents[0])].join("\n");
+		return {
+			content: [{ type: "text", text }],
+			details: {
+				batchId,
+				batchName,
+				agents: finalAgents,
+			},
+		};
+	} finally {
+		stopProgressUpdates();
+	}
 }
 
 export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
@@ -323,7 +334,11 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			const label = taskCount > 1 ? `${taskCount} agents` : "1 agent";
 			return new Text(theme.fg("accent", `codex_spawn ${label}`), 0, 0);
 		},
-		renderResult(result, _options, theme) {
+		renderResult(result, options, theme) {
+			const partialSummary = options.isPartial ? readToolProgressSummary(result) : null;
+			if (partialSummary) {
+				return new Text(theme.fg("accent", partialSummary), 0, 0);
+			}
 			const details = (result as any).details ?? {};
 			const agents = Array.isArray(details.agents) ? details.agents : [];
 			const batch = details.batchId ? `batch=${details.batchId}` : "single";
@@ -346,8 +361,16 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 		renderCall(args, theme) {
 			return new Text(theme.fg("accent", `codex_delegate ${(args as any).batchName ?? "task"}`), 0, 0);
 		},
-		renderResult(result, _options, theme) {
-			return new Text(theme.fg("accent", result.content?.[0]?.text ?? "Delegated"), 0, 0);
+		renderResult(result, options, theme) {
+			const partialSummary = options.isPartial ? readToolProgressSummary(result) : null;
+			if (partialSummary) {
+				return new Text(theme.fg("accent", partialSummary), 0, 0);
+			}
+			const details = (result as any).details ?? {};
+			const agents = Array.isArray(details.agents) ? details.agents : [];
+			const batch = details.batchId ? `batch=${details.batchId}` : "single";
+			const body = agents.length > 0 ? summarizeAgents(agents) : result.content?.[0]?.text ?? "Delegated";
+			return new Text(`${theme.fg("accent", `DoE ${batch}`)}\n${body}`, 0, 0);
 		},
 		async execute(_toolCallId, params, signal, onUpdate) {
 			return executeSpawnLike(params, signal, onUpdate as any, deps);

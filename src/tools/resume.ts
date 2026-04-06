@@ -9,6 +9,7 @@ import { readOptionalModelId, validateModelId } from "../codex/model-selection.j
 import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
 import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
+import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
@@ -110,12 +111,16 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 		renderCall(args, theme) {
 			return new Text(theme.fg("accent", `codex_resume ${(args as any).ic ?? (args as any).agentId ?? (args as any).threadId ?? "thread"}`), 0, 0);
 		},
-		renderResult(result, _options, theme) {
+		renderResult(result, options, theme) {
+			const partialSummary = options.isPartial ? readToolProgressSummary(result) : null;
+			if (partialSummary) {
+				return new Text(theme.fg("accent", partialSummary), 0, 0);
+			}
 			const agent = (result as any).details?.agent;
 			const preview = truncateForDisplay(`${formatUsageCompact(agent?.usage)}${formatCompactionSignal(agent?.compaction) ? ` ${formatCompactionSignal(agent?.compaction)}` : ""} ${agent?.latestFinalOutput ?? agent?.latestSnippet ?? result.content?.[0]?.text ?? "Resumed"}`, 240);
 			return new Text(theme.fg("accent", preview), 0, 0);
 		},
-		async execute(_toolCallId, params, signal) {
+		async execute(_toolCallId, params, signal, onUpdate) {
 			const agent = resolveResumeTarget(deps.registry, params);
 			if (!agent?.threadId) {
 				throw new Error("Unknown IC/agent/thread. Provide an active seat name, or an existing agentId/threadId from codex_list/codex_inspect.");
@@ -133,6 +138,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			const inheritedModel = explicitModel || templateDefaultModel ? null : validateModelId(agent.model, `stored model for agent ${agent.id}`);
 			const model = validateModelId(explicitModel ?? templateDefaultModel ?? inheritedModel ?? agent.model, explicitModel ? "model" : "resolved model");
 			const allowWrite = params.allowWrite ?? ((templateName ?? params.template ?? agent.template ?? null) === "implement" ? true : (agent.allowWrite ?? false));
+			const runStartedAt = Date.now();
 
 			deps.registry.upsertAgent({
 				...agent,
@@ -144,6 +150,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				allowWrite,
 				latestSnippet: `resume: ${truncateForDisplay(prompt, 120)}`,
 				latestFinalOutput: null,
+				runStartedAt,
 				completedAt: null,
 				notificationMode,
 				returnMode,
@@ -151,50 +158,62 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 				messages: agent.messages ?? [],
 				historyHydratedAt: agent.historyHydratedAt ?? null,
 			});
+			const stopProgressUpdates = startToolProgressUpdates({
+				registry: deps.registry,
+				agentIds: [agent.id],
+				onUpdate: onUpdate as any,
+				baseDetails: {
+					partial: true,
+				},
+			});
 
-			if (agent.activeTurnId && agent.state === "working") {
-				if (params.allowWrite !== undefined && params.allowWrite !== (agent.allowWrite ?? false)) {
-					throw new Error("Cannot change read/write permission while a turn is already running. Wait for the active turn to finish, then resume with allowWrite set for the next turn.");
+			try {
+				if (agent.activeTurnId && agent.state === "working") {
+					if (params.allowWrite !== undefined && params.allowWrite !== (agent.allowWrite ?? false)) {
+						throw new Error("Cannot change read/write permission while a turn is already running. Wait for the active turn to finish, then resume with allowWrite set for the next turn.");
+					}
+					await deps.client.steerTurn({
+						threadId: agent.threadId,
+						expectedTurnId: agent.activeTurnId,
+						prompt,
+					});
+					deps.registry.appendUserMessage(agent.id, agent.activeTurnId, prompt);
+				} else {
+					await deps.client.resumeThread({
+						threadId: agent.threadId,
+						cwd: agent.cwd,
+						model,
+						approvalPolicy,
+						allowWrite,
+					});
+					const turn = await deps.client.startTurn({
+						threadId: agent.threadId,
+						prompt,
+						cwd: agent.cwd,
+						model,
+						effort,
+						approvalPolicy,
+						networkAccess,
+						allowWrite,
+					});
+					deps.registry.markThreadAttached(agent.id, { threadId: agent.threadId, activeTurnId: turn.turn.id });
+					deps.registry.markTurnStarted(agent.threadId, turn.turn.id);
+					deps.registry.appendUserMessage(agent.id, turn.turn.id, prompt);
 				}
-				await deps.client.steerTurn({
-					threadId: agent.threadId,
-					expectedTurnId: agent.activeTurnId,
-					prompt,
-				});
-				deps.registry.appendUserMessage(agent.id, agent.activeTurnId, prompt);
-			} else {
-				await deps.client.resumeThread({
-					threadId: agent.threadId,
-					cwd: agent.cwd,
-					model,
-					approvalPolicy,
-					allowWrite,
-				});
-				const turn = await deps.client.startTurn({
-					threadId: agent.threadId,
-					prompt,
-					cwd: agent.cwd,
-					model,
-					effort,
-					approvalPolicy,
-					networkAccess,
-					allowWrite,
-				});
-				deps.registry.markThreadAttached(agent.id, { threadId: agent.threadId, activeTurnId: turn.turn.id });
-				deps.registry.markTurnStarted(agent.threadId, turn.turn.id);
-				deps.registry.appendUserMessage(agent.id, turn.turn.id, prompt);
-			}
 
-			const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
-			let text = resolveAgentFinalOutput(finalAgent);
-			if (!text && finalAgent.threadId) {
-				const threadResponse = await deps.client.readThread(finalAgent.threadId, true);
-				text = extractLastCompletedAgentMessage(threadResponse.thread);
+				const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
+				let text = resolveAgentFinalOutput(finalAgent);
+				if (!text && finalAgent.threadId) {
+					const threadResponse = await deps.client.readThread(finalAgent.threadId, true);
+					text = extractLastCompletedAgentMessage(threadResponse.thread);
+				}
+				return {
+					content: [{ type: "text", text: [`ic: ${finalAgent.name}`, `state: ${finalAgent.state}`, `context: ${formatUsageCompact(finalAgent.usage)}`, ...(formatCompactionSignal(finalAgent.compaction) ? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`] : []), "", text ?? "Completed"].join("\n") }],
+					details: { agent: finalAgent },
+				};
+			} finally {
+				stopProgressUpdates();
 			}
-			return {
-				content: [{ type: "text", text: [`ic: ${finalAgent.name}`, `state: ${finalAgent.state}`, `context: ${formatUsageCompact(finalAgent.usage)}`, ...(formatCompactionSignal(finalAgent.compaction) ? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`] : []), "", text ?? "Completed"].join("\n") }],
-				details: { agent: finalAgent },
-			};
 		},
 	});
 }
