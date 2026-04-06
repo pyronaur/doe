@@ -4,10 +4,20 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { CodexAppServerClient } from "./src/codex/app-server-client.js";
 import { validateModelId } from "./src/codex/model-selection.js";
 import type { CodexClientEvent } from "./src/codex/client.js";
+import {
+	DOE_PLAN_STATE_TYPE,
+	clonePlanState,
+	createEmptyPlanState,
+	restoreLatestPlanState,
+	serializePlanState,
+	type DoePlanState,
+} from "./src/plan/session-state.js";
 import { DoeRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
 import { AgentLiveViewController, formatElapsed } from "./src/ui/agent-live-view.js";
 import { formatUsageCompact } from "./src/context-usage.js";
 import { loadMarkdownDoc, loadMarkdownDocs, summarizeTemplates } from "./src/templates/loader.js";
+import { registerPlanStartTool } from "./src/tools/plan-start.js";
+import { registerSessionSetTool } from "./src/tools/session-set.js";
 import { registerSpawnTool } from "./src/tools/spawn.js";
 import { registerResumeTool } from "./src/tools/resume.js";
 import { registerListTool } from "./src/tools/list.js";
@@ -16,7 +26,10 @@ import { registerCancelTool } from "./src/tools/cancel.js";
 import { registerFinalizeTool } from "./src/tools/finalize.js";
 
 const DOE_FLAG = "doe";
-const TOOL_NAMES = ["codex_spawn", "codex_delegate", "codex_resume", "codex_list", "codex_inspect", "codex_cancel", "codex_finalize"];
+const PLANNOTATOR_REQUEST_CHANNEL = "plannotator:request";
+const PLANNOTATOR_REVIEW_RESULT_CHANNEL = "plannotator:review-result";
+const PLANNOTATOR_TIMEOUT_MS = 5_000;
+const TOOL_NAMES = ["session_set", "plan_start", "codex_spawn", "codex_delegate", "codex_resume", "codex_list", "codex_inspect", "codex_cancel", "codex_finalize"];
 const DOE_MONITOR_SHORTCUT = "ctrl+,";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = join(__dirname, "prompts");
@@ -25,6 +38,7 @@ const TEMPLATES_DIR = join(__dirname, "templates");
 interface DoeRuntime {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
+	planState: DoePlanState;
 	liveView: AgentLiveViewController;
 	latestCtx: ExtensionContext | null;
 	persistTimer: ReturnType<typeof setTimeout> | null;
@@ -107,6 +121,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 		runtime = {
 			client,
 			registry,
+			planState: createEmptyPlanState(),
 			liveView,
 			latestCtx: ctx ?? null,
 			persistTimer: null,
@@ -114,9 +129,39 @@ export default function doeExtension(pi: ExtensionAPI) {
 
 		registry.on("event", handleRegistryEvent);
 		client.on("event", handleCodexEvent);
+		pi.events.on(PLANNOTATOR_REVIEW_RESULT_CHANNEL, (data) => {
+			void handlePlanReviewResult(data as {
+				reviewId?: string;
+				approved?: boolean;
+				feedback?: string;
+				savedPath?: string;
+				agentSwitch?: string;
+				permissionMode?: string;
+			});
+		});
 
-		registerSpawnTool(pi, { client, registry, templatesDir: TEMPLATES_DIR });
-		registerResumeTool(pi, { client, registry, templatesDir: TEMPLATES_DIR });
+		registerSessionSetTool(pi);
+		registerPlanStartTool(pi, {
+			client,
+			registry,
+			templatesDir: TEMPLATES_DIR,
+			getSessionSlug: () => pi.getSessionName() ?? null,
+			getPlanState: () => clonePlanState(getRuntime().planState),
+			setPlanState: updatePlanState,
+			requestPlanReview,
+		});
+		registerSpawnTool(pi, {
+			client,
+			registry,
+			templatesDir: TEMPLATES_DIR,
+			getSessionSlug: () => pi.getSessionName() ?? null,
+		});
+		registerResumeTool(pi, {
+			client,
+			registry,
+			templatesDir: TEMPLATES_DIR,
+			getSessionSlug: () => pi.getSessionName() ?? null,
+		});
 		registerListTool(pi, { registry });
 		registerInspectTool(pi, { client, registry });
 		registerCancelTool(pi, { client, registry });
@@ -163,6 +208,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 			runtime.persistTimer = null;
 		}
 		pi.appendEntry("doe-registry", runtime.registry.serialize());
+		pi.appendEntry(DOE_PLAN_STATE_TYPE, serializePlanState(runtime.planState));
 	}
 
 	function schedulePersist() {
@@ -172,7 +218,100 @@ export default function doeExtension(pi: ExtensionAPI) {
 			if (!runtime) return;
 			runtime.persistTimer = null;
 			pi.appendEntry("doe-registry", runtime.registry.serialize());
+			pi.appendEntry(DOE_PLAN_STATE_TYPE, serializePlanState(runtime.planState));
 		}, 5000);
+	}
+
+	function updatePlanState(
+		updater: (state: DoePlanState) => DoePlanState,
+		options: { flush?: boolean } = {},
+	): DoePlanState {
+		const activeRuntime = getRuntime();
+		activeRuntime.planState = clonePlanState(updater(clonePlanState(activeRuntime.planState)));
+		if (options.flush) {
+			flushPersist();
+		} else {
+			schedulePersist();
+		}
+		return clonePlanState(activeRuntime.planState);
+	}
+
+	function requestPlanReview(input: { planContent: string; planFilePath: string }): Promise<{ reviewId: string }> {
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			const timer = setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				reject(new Error("Timed out waiting for Plannotator review startup."));
+			}, PLANNOTATOR_TIMEOUT_MS);
+			pi.events.emit(PLANNOTATOR_REQUEST_CHANNEL, {
+				requestId: `doe-plan-${Date.now()}`,
+				action: "plan-review",
+				payload: {
+					planContent: input.planContent,
+					planFilePath: input.planFilePath,
+					origin: "doe",
+				},
+				respond: (response: any) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					if (response?.status !== "handled") {
+						reject(new Error(response?.error ?? "Plannotator review is unavailable."));
+						return;
+					}
+					const reviewId = response?.result?.reviewId;
+					if (typeof reviewId !== "string" || !reviewId.trim()) {
+						reject(new Error("Plannotator review did not return a reviewId."));
+						return;
+					}
+					resolve({ reviewId });
+				},
+			});
+		});
+	}
+
+	async function handlePlanReviewResult(result: {
+		reviewId?: string;
+		approved?: boolean;
+		feedback?: string;
+		savedPath?: string;
+		agentSwitch?: string;
+		permissionMode?: string;
+	}) {
+		if (!runtime) return;
+		const pending = runtime.planState.pendingReview;
+		if (!pending?.reviewId || pending.reviewId !== result.reviewId) return;
+		const planSlug = runtime.planState.activePlan?.planSlug ?? pending.planSlug;
+		updatePlanState(
+			(current) => ({
+				...current,
+				pendingReview: null,
+			}),
+			{ flush: true },
+		);
+		pi.sendMessage(
+			{
+				customType: "doe-plan-review",
+				display: false,
+				content: [
+					`Plan review result for ${planSlug}: ${result.approved ? "approved" : "rejected"}.`,
+					result.feedback?.trim() ? `Feedback:\n${result.feedback.trim()}` : null,
+					result.savedPath ? `Saved path: ${result.savedPath}` : null,
+					result.agentSwitch ? `Agent switch: ${result.agentSwitch}` : null,
+					result.permissionMode ? `Permission mode: ${result.permissionMode}` : null,
+				]
+					.filter(Boolean)
+					.join("\n\n"),
+				details: {
+					reviewId: result.reviewId ?? null,
+					approved: result.approved === true,
+					feedback: result.feedback ?? null,
+					planSlug,
+				},
+			},
+			{ deliverAs: "steer", triggerTurn: true },
+		);
 	}
 
 	function updateUi(ctx: ExtensionContext) {
@@ -192,6 +331,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 
 	async function restoreState(ctx: ExtensionContext) {
 		const activeRuntime = getRuntime();
+		activeRuntime.planState = restoreLatestPlanState(ctx.sessionManager.getBranch());
 		activeRuntime.registry.restore(latestSnapshot(ctx));
 		const recoverableAgents = activeRuntime.registry.listRecoverableAgents();
 		if (recoverableAgents.length === 0) return;

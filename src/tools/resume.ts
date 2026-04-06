@@ -6,6 +6,7 @@ import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { extractLastCompletedAgentMessage, truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
+import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
 import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 
@@ -16,6 +17,7 @@ interface ResumeToolDeps {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
 	templatesDir: string;
+	getSessionSlug?: () => string | null;
 }
 
 function resolveAgentFinalOutput(agent: any): string | null {
@@ -28,9 +30,15 @@ function resolveAgentFinalOutput(agent: any): string | null {
 function buildPrompt(
 	params: any,
 	templatesDir: string,
+	sharedContext: SharedKnowledgebaseContext | null,
 ): { templateName: string | null; prompt: string; templateDefaultModel: string | null; templateDefaultEffort: ReasoningEffort | null } {
 	if (!params.template) {
-		return { templateName: null, prompt: params.prompt, templateDefaultModel: null, templateDefaultEffort: null };
+		return {
+			templateName: null,
+			prompt: injectSharedKnowledgebaseContext(params.prompt, sharedContext),
+			templateDefaultModel: null,
+			templateDefaultEffort: null,
+		};
 	}
 	const docs = loadMarkdownDocs(templatesDir);
 	const doc = docs.find((entry) => entry.name === params.template);
@@ -44,7 +52,10 @@ function buildPrompt(
 	const rendered = renderMarkdownTemplate(doc, { task: params.prompt, ...(params.templateVariables ?? {}) }).trim();
 	return {
 		templateName: doc.name,
-		prompt: usesTaskPlaceholder || !params.prompt ? rendered : `${rendered}\n\n# Task\n${params.prompt}`,
+		prompt: injectSharedKnowledgebaseContext(
+			usesTaskPlaceholder || !params.prompt ? rendered : `${rendered}\n\n# Task\n${params.prompt}`,
+			sharedContext,
+		),
 		templateDefaultModel: defaultModel,
 		templateDefaultEffort: defaultEffort,
 	};
@@ -114,7 +125,9 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			const returnMode = "wait" as const;
 			const approvalPolicy = (params.approvalPolicy ?? "never") as ApprovalPolicy;
 			const networkAccess = params.networkAccess ?? false;
-			const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(params, deps.templatesDir);
+			const sessionSlug = deps.getSessionSlug?.() ?? null;
+			const sharedContext = sessionSlug ? getSharedKnowledgebaseContext(agent.cwd, sessionSlug) : null;
+			const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(params, deps.templatesDir, sharedContext);
 			const effort = (params.effort ?? templateDefaultEffort ?? agent.effort ?? "medium") as ReasoningEffort;
 			const explicitModel = readOptionalModelId(params.model, "model");
 			const inheritedModel = explicitModel || templateDefaultModel ? null : validateModelId(agent.model, `stored model for agent ${agent.id}`);

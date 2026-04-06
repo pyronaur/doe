@@ -7,6 +7,7 @@ import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
+import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
 import type { AssignableRosterBucket, NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 import { normalizeSpawnSeatIntent } from "./spawn-seat-intent.js";
@@ -51,6 +52,7 @@ interface SpawnToolDeps {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
 	templatesDir: string;
+	getSessionSlug?: () => string | null;
 }
 
 function inferName(prompt: string): string {
@@ -61,11 +63,12 @@ function inferName(prompt: string): string {
 function buildPrompt(
 	task: any,
 	templatesDir: string,
+	sharedContext: SharedKnowledgebaseContext | null,
 ): { templateName: string | null; prompt: string; templateDefaultModel: string | null; templateDefaultEffort: ReasoningEffort | null } {
 	if (!task.template) {
 		return {
 			templateName: null,
-			prompt: task.prompt,
+			prompt: injectSharedKnowledgebaseContext(task.prompt, sharedContext),
 			templateDefaultModel: null,
 			templateDefaultEffort: null,
 		};
@@ -92,6 +95,7 @@ function buildPrompt(
 	if (task.prompt && !usesTaskPlaceholder) {
 		rendered = `${rendered}\n\n# Task\n${task.prompt}`.trim();
 	}
+	rendered = injectSharedKnowledgebaseContext(rendered, sharedContext);
 	return {
 		templateName: doc.name,
 		prompt: rendered,
@@ -198,7 +202,9 @@ async function executeSpawnLike(
 		const approvalPolicy = (rawTask.approvalPolicy ?? "never") as ApprovalPolicy;
 		const networkAccess = rawTask.networkAccess ?? false;
 		const taskName = rawTask.name?.trim() || inferName(rawTask.prompt);
-		const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir);
+		const sessionSlug = deps.getSessionSlug?.() ?? null;
+		const sharedContext = sessionSlug ? getSharedKnowledgebaseContext(cwd, sessionSlug) : null;
+		const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir, sharedContext);
 		const explicitModel = readOptionalModelId(rawTask.model, "model");
 		const model = validateModelId(explicitModel ?? templateDefaultModel ?? "gpt-5.4-mini", explicitModel ? "model" : "resolved model");
 		const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
