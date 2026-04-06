@@ -5,6 +5,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
+import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 
@@ -68,9 +69,7 @@ function buildPrompt(
 	if (!doc) {
 		throw new Error(`Unknown template "${task.template}". Available: ${docs.map((entry) => entry.name).join(", ") || "none"}`);
 	}
-	const defaultModel = typeof doc.attributes.default_model === "string" && doc.attributes.default_model.trim()
-		? doc.attributes.default_model.trim()
-		: null;
+	const defaultModel = readOptionalModelId(doc.attributes.default_model, `template \"${doc.name}\" default_model`);
 	const defaultEffort = doc.attributes.default_effort;
 	if (defaultEffort !== "low" && defaultEffort !== "medium" && defaultEffort !== "high" && defaultEffort !== "xhigh") {
 		throw new Error(`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`);
@@ -172,7 +171,8 @@ async function executeSpawnLike(
 		const networkAccess = rawTask.networkAccess ?? false;
 		const name = rawTask.name?.trim() || inferName(rawTask.prompt);
 		const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir);
-		const model = rawTask.model ?? templateDefaultModel ?? "gpt-5.4-mini";
+		const explicitModel = readOptionalModelId(rawTask.model, "model");
+		const model = validateModelId(explicitModel ?? templateDefaultModel ?? "gpt-5.4-mini", explicitModel ? "model" : "resolved model");
 		const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
 		const allowWrite = inferAllowWrite(rawTask, templateName);
 		const agentId = seededAgentIds[index - 1]!;
@@ -257,6 +257,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 		promptGuidelines: [
 			"Use for new work only. Do not use when an existing thread has relevant context — use codex_resume instead.",
 			"Pass multiple tasks in tasks[] when the questions are independent. Each task gets its own thread.",
+			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
 			"Workers are read-only by default. Set allowWrite=true per task, or use template=implement which enables write automatically.",
 			"Waits for all workers to complete before returning. Returns a text summary and a details.agents[] array.",
 		],

@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { CodexAppServerClient } from "./src/codex/app-server-client.js";
+import { validateModelId } from "./src/codex/model-selection.js";
 import type { CodexClientEvent } from "./src/codex/client.js";
 import { DoeRegistry, type PersistedRegistrySnapshot, type RegistryEvent } from "./src/state/registry.js";
 import { AgentSidebarController } from "./src/ui/agent-sidebar.js";
@@ -96,7 +97,8 @@ export default function doeExtension(pi: ExtensionAPI) {
 		await client.ensureStarted();
 		for (const agent of recoverableAgents) {
 			try {
-				await client.resumeThread({ threadId: agent.threadId!, cwd: agent.cwd, model: agent.model, allowWrite: agent.allowWrite ?? false });
+				const model = validateModelId(agent.model, `stored model for agent ${agent.id}`);
+				await client.resumeThread({ threadId: agent.threadId!, cwd: agent.cwd, model, allowWrite: agent.allowWrite ?? false });
 				registry.markThreadAttached(agent.id, { threadId: agent.threadId!, recovered: true });
 			} catch (error) {
 				registry.markError(agent.threadId!, `Failed to rehydrate thread: ${error instanceof Error ? error.message : String(error)}`);

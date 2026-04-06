@@ -4,6 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
+import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 
@@ -26,9 +27,7 @@ function buildPrompt(
 	const docs = loadMarkdownDocs(templatesDir);
 	const doc = docs.find((entry) => entry.name === params.template);
 	if (!doc) throw new Error(`Unknown template \"${params.template}\".`);
-	const defaultModel = typeof doc.attributes.default_model === "string" && doc.attributes.default_model.trim()
-		? doc.attributes.default_model.trim()
-		: null;
+	const defaultModel = readOptionalModelId(doc.attributes.default_model, `template \"${doc.name}\" default_model`);
 	const defaultEffort = doc.attributes.default_effort;
 	if (defaultEffort !== "low" && defaultEffort !== "medium" && defaultEffort !== "high" && defaultEffort !== "xhigh") {
 		throw new Error(`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`);
@@ -52,6 +51,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 		promptGuidelines: [
 			"Requires agentId (available from codex_list) or threadId (available from codex_inspect).",
 			"Does not accept tasks[], name, cwd, or batchName.",
+			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
 			"Keep read-only unless this is explicit implementation work — set allowWrite=true only then.",
 			"Waits for the worker to finish before returning. Returns a text summary and a details.agent record.",
 		],
@@ -89,7 +89,9 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			const networkAccess = params.networkAccess ?? false;
 			const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(params, deps.templatesDir);
 			const effort = (params.effort ?? templateDefaultEffort ?? agent.effort ?? "medium") as ReasoningEffort;
-			const model = params.model ?? templateDefaultModel ?? agent.model;
+			const explicitModel = readOptionalModelId(params.model, "model");
+			const inheritedModel = explicitModel || templateDefaultModel ? null : validateModelId(agent.model, `stored model for agent ${agent.id}`);
+			const model = validateModelId(explicitModel ?? templateDefaultModel ?? inheritedModel ?? agent.model, explicitModel ? "model" : "resolved model");
 			const allowWrite = params.allowWrite ?? ((templateName ?? params.template ?? agent.template ?? null) === "implement" ? true : (agent.allowWrite ?? false));
 
 			deps.registry.upsertAgent({
