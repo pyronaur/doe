@@ -5,7 +5,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
-import { formatUsageCompact } from "../context-usage.js";
+import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import type { NotificationMode, DoeRegistry } from "../state/registry.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
@@ -130,7 +130,7 @@ function normalizeMultiTaskArgs(args: unknown) {
 
 function summarizeAgents(agents: Array<any>, maxSnippet = 120): string {
 	return agents
-		.map((agent) => `- ${agent.name} [${agent.state}] ${agent.model} ${formatUsageCompact(agent.usage)} — ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, maxSnippet)}`)
+		.map((agent) => `${`- ${agent.name} [${agent.state}] ${agent.model} ${formatUsageCompact(agent.usage)}${formatCompactionSignal(agent.compaction) ? ` ${formatCompactionSignal(agent.compaction)}` : ""}`} — ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, maxSnippet)}`)
 		.join("\n");
 }
 
@@ -143,7 +143,7 @@ function resolveAgentFinalOutput(agent: any): string {
 
 function formatBatchOutputs(agents: Array<any>): string {
 	return agents
-		.map((agent, index) => [`## ${index + 1}. ${agent.name}`, `state: ${agent.state}`, `context: ${formatUsageCompact(agent.usage)}`, "", resolveAgentFinalOutput(agent)].join("\n"))
+		.map((agent, index) => [`## ${index + 1}. ${agent.name}`, `state: ${agent.state}`, `context: ${formatUsageCompact(agent.usage)}`, ...(formatCompactionSignal(agent.compaction) ? [`context_status: ${formatCompactionSignal(agent.compaction)}`] : []), "", resolveAgentFinalOutput(agent)].join("\n"))
 		.join("\n\n---\n\n");
 }
 
@@ -206,6 +206,7 @@ async function executeSpawnLike(
 			latestFinalOutput: null,
 			lastError: null,
 			usage: null,
+			compaction: null,
 			startedAt: Date.now(),
 			completedAt: null,
 			parentBatchId: batchId,
@@ -251,7 +252,7 @@ async function executeSpawnLike(
 		: [await deps.registry.waitForAgent(agentIds[0]!, signal)];
 	const text = batchId
 		? formatBatchOutputs(finalAgents)
-		: [`name: ${finalAgents[0].name}`, `state: ${finalAgents[0].state}`, `context: ${formatUsageCompact(finalAgents[0].usage)}`, "", resolveAgentFinalOutput(finalAgents[0])].join("\n");
+		: [`name: ${finalAgents[0].name}`, `state: ${finalAgents[0].state}`, `context: ${formatUsageCompact(finalAgents[0].usage)}`, ...(formatCompactionSignal(finalAgents[0].compaction) ? [`context_status: ${formatCompactionSignal(finalAgents[0].compaction)}`] : []), "", resolveAgentFinalOutput(finalAgents[0])].join("\n");
 	return {
 		content: [{ type: "text", text }],
 		details: {

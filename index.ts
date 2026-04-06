@@ -29,13 +29,28 @@ interface DoeRuntime {
 	persistTimer: ReturnType<typeof setTimeout> | null;
 }
 
+async function refreshThreadUsage(runtime: DoeRuntime, threadId: string, turnId: string | null = null) {
+	try {
+		const usage = await runtime.client.readContextWindowUsage(threadId, turnId);
+		if (!usage) return;
+		runtime.registry.markTokenUsage(threadId, turnId, usage);
+	} catch {}
+}
+
 function formatActiveWidget(registry: DoeRegistry): string[] {
 	const agents = registry.listAgents({ includeCompleted: false });
 	if (agents.length === 0) return [];
 	return [
 		`DoE Active Agents (${agents.length})`,
 		"Currently running workstreams:",
-		...agents.map((agent, index) => `${index + 1}. ${agent.name} | ${agent.activityLabel ?? agent.state} | ${formatElapsed(agent.startedAt, agent.completedAt)} | ${formatUsageCompact(agent.usage)}`),
+		...agents.map((agent, index) => {
+			const signal = agent.compaction?.inProgress
+				? " | compacting"
+				: (agent.compaction?.count ?? 0) > 0
+					? " | compacted reseed?"
+					: "";
+			return `${index + 1}. ${agent.name} | ${agent.activityLabel ?? agent.state} | ${formatElapsed(agent.startedAt, agent.completedAt)} | ${formatUsageCompact(agent.usage)}${signal}`;
+		}),
 		`${DOE_MONITOR_SHORTCUT} monitor`,
 	];
 }
@@ -212,10 +227,22 @@ export default function doeExtension(pi: ExtensionAPI) {
 				runtime.registry.markThreadStatus(event.threadId, event.status);
 				break;
 			case "thread-token-usage":
-				runtime.registry.markTokenUsage(event.threadId, event.turnId, event.tokenUsage);
+				runtime.registry.markTokenUsage(event.threadId, event.turnId, event.usage);
+				break;
+			case "thread-compaction-started":
+				runtime.registry.markCompactionStarted(event.threadId, { turnId: event.turnId, itemId: event.itemId });
+				break;
+			case "thread-compaction-completed":
+				runtime.registry.markCompactionCompleted(event.threadId, {
+					turnId: event.turnId,
+					itemId: event.itemId,
+					source: event.source,
+				});
+				void refreshThreadUsage(runtime, event.threadId, event.turnId);
 				break;
 			case "turn-started":
 				runtime.registry.markTurnStarted(event.threadId, event.turnId);
+				void refreshThreadUsage(runtime, event.threadId, event.turnId);
 				break;
 			case "agent-message-delta":
 				runtime.registry.appendAgentMessageDelta(event.threadId, event.turnId, event.itemId, event.delta);
@@ -241,6 +268,10 @@ export default function doeExtension(pi: ExtensionAPI) {
 				}
 				break;
 			case "thread-started":
+				if (event.thread?.id) {
+					void refreshThreadUsage(runtime, event.thread.id, null);
+				}
+				break;
 			default:
 				break;
 		}

@@ -10,7 +10,7 @@ import {
 	extractTurnMessages,
 	truncateForDisplay,
 } from "../codex/client.js";
-import { formatUsageBreakdown, formatUsageCompact } from "../context-usage.js";
+import { formatCompactionSignal, formatUsageBreakdown, formatUsageCompact } from "../context-usage.js";
 import type { DoeRegistry } from "../state/registry.js";
 
 const ActionSchema = StringEnum(["index", "files", "query", "transcript", "raw"] as const);
@@ -129,6 +129,7 @@ export function registerInspectTool(
 				`state: ${agent.state}`,
 				`model: ${agent.model}`,
 				`context: ${formatUsageCompact(agent.usage)}`,
+				...(formatCompactionSignal(agent.compaction) ? [`context_status: ${formatCompactionSignal(agent.compaction)}`] : []),
 				`mode: ${agent.allowWrite ? "write" : "read-only"}`,
 				`cwd: ${agent.cwd}`,
 				`turns: ${(thread.turns ?? []).length}`,
@@ -138,7 +139,7 @@ export function registerInspectTool(
 			if (action === "index") {
 				const lines = [
 					...baseLines,
-					...formatUsageBreakdown(agent.usage),
+					...formatUsageBreakdown(agent.usage, agent.compaction),
 					`latest: ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, 300)}`,
 					"",
 					"first_user:",

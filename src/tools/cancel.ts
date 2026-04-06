@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { formatUsageCompact } from "../context-usage.js";
+import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import type { DoeRegistry } from "../state/registry.js";
 
 export function registerCancelTool(
@@ -42,7 +42,7 @@ export function registerCancelTool(
 			deps.registry.markAwaitingInput(agent.threadId, "Interrupted by Director of Engineering.");
 			const updated = deps.registry.getAgent(agent.id);
 			return {
-				content: [{ type: "text", text: `Interrupted ${agent.name} (${agent.id}).\ncontext: ${formatUsageCompact(updated?.usage)}` }],
+				content: [{ type: "text", text: `Interrupted ${agent.name} (${agent.id}).\ncontext: ${formatUsageCompact(updated?.usage)}${formatCompactionSignal(updated?.compaction) ? `\ncontext_status: ${formatCompactionSignal(updated?.compaction)}` : ""}` }],
 				details: { agent: updated },
 			};
 		},

@@ -11,7 +11,7 @@ import {
 	type TurnStartOptions,
 	type TurnSteerOptions,
 } from "./client.js";
-import type { ThreadTokenUsage, TokenUsageBreakdown } from "../context-usage.js";
+import type { CurrentContextUsage, ThreadTokenUsage, TokenUsageBreakdown } from "../context-usage.js";
 
 interface PendingRequest {
 	resolve: (value: any) => void;
@@ -63,6 +63,33 @@ function normalizeThreadTokenUsage(value: any): ThreadTokenUsage | null {
 		total: normalizeBreakdown(value.total),
 		last: normalizeBreakdown(value.last),
 		modelContextWindow: window,
+	};
+}
+
+function normalizeCurrentContextUsage(value: any): CurrentContextUsage | null {
+	if (!value || typeof value !== "object") return null;
+	const tokensUsedCandidates = [
+		value?.tokensUsed,
+		value?.tokens_used,
+		value?.last_token_usage?.total_tokens,
+		value?.lastTokenUsage?.totalTokens,
+		value?.total_token_usage?.total_tokens,
+		value?.totalTokenUsage?.totalTokens,
+	];
+	const tokenLimitCandidates = [
+		value?.tokenLimit,
+		value?.token_limit,
+		value?.model_context_window,
+		value?.modelContextWindow,
+		value?.context_window,
+		value?.contextWindow,
+	];
+	const rawTokensUsed = tokensUsedCandidates.find((entry) => typeof entry === "number" && Number.isFinite(entry));
+	const rawTokenLimit = tokenLimitCandidates.find((entry) => typeof entry === "number" && Number.isFinite(entry));
+	if (typeof rawTokensUsed !== "number" || typeof rawTokenLimit !== "number" || rawTokenLimit <= 0) return null;
+	return {
+		tokensUsed: Math.max(0, Math.min(rawTokensUsed, rawTokenLimit)),
+		tokenLimit: rawTokenLimit,
 	};
 }
 
@@ -178,6 +205,15 @@ export class CodexAppServerClient extends EventEmitter {
 	async readThread(threadId: string, includeTurns = true): Promise<{ thread: ThreadSummary }> {
 		await this.ensureStarted();
 		return this.request("thread/read", { threadId, includeTurns });
+	}
+
+	async readContextWindowUsage(threadId: string, turnId?: string | null): Promise<CurrentContextUsage | null> {
+		await this.ensureStarted();
+		const result = await this.request("thread/contextWindow/read", {
+			threadId,
+			turnId: turnId ?? null,
+		});
+		return normalizeCurrentContextUsage(result?.usage ?? result);
 	}
 
 	async startTurn(options: TurnStartOptions): Promise<any> {
@@ -331,16 +367,41 @@ export class CodexAppServerClient extends EventEmitter {
 				} satisfies CodexClientEvent);
 				return;
 			case "thread/tokenUsage/updated": {
-				const tokenUsage = normalizeThreadTokenUsage(params.tokenUsage);
-				if (!tokenUsage) return;
+				const usage = normalizeCurrentContextUsage(params.usage ?? params.tokenUsage);
+				if (!usage) {
+					const tokenUsage = normalizeThreadTokenUsage(params.tokenUsage);
+					if (!tokenUsage) return;
+					const fallback = normalizeCurrentContextUsage({
+						last_token_usage: { total_tokens: tokenUsage.last.totalTokens },
+						total_token_usage: { total_tokens: tokenUsage.total.totalTokens },
+						model_context_window: tokenUsage.modelContextWindow,
+					});
+					if (!fallback) return;
+					this.emit("event", {
+						type: "thread-token-usage",
+						threadId: params.threadId,
+						turnId: typeof params.turnId === "string" ? params.turnId : null,
+						usage: fallback,
+					} satisfies CodexClientEvent);
+					return;
+				}
 				this.emit("event", {
 					type: "thread-token-usage",
 					threadId: params.threadId,
 					turnId: typeof params.turnId === "string" ? params.turnId : null,
-					tokenUsage,
+					usage,
 				} satisfies CodexClientEvent);
 				return;
 			}
+			case "thread/compacted":
+				this.emit("event", {
+					type: "thread-compaction-completed",
+					threadId: params.threadId,
+					turnId: typeof params.turnId === "string" ? params.turnId : null,
+					itemId: null,
+					source: "thread/compacted",
+				} satisfies CodexClientEvent);
+				return;
 			case "turn/started":
 				this.emit("event", {
 					type: "turn-started",
@@ -349,6 +410,15 @@ export class CodexAppServerClient extends EventEmitter {
 				} satisfies CodexClientEvent);
 				return;
 			case "item/started": {
+				if (params.item?.type === "contextCompaction") {
+					this.emit("event", {
+						type: "thread-compaction-started",
+						threadId: params.threadId,
+						turnId: typeof params.turnId === "string" ? params.turnId : null,
+						itemId: typeof params.item?.id === "string" ? params.item.id : null,
+					} satisfies CodexClientEvent);
+					return;
+				}
 				const activity = activityFromItem(params.item, "started");
 				if (activity) {
 					this.emit("event", {
@@ -378,6 +448,16 @@ export class CodexAppServerClient extends EventEmitter {
 				} satisfies CodexClientEvent);
 				return;
 			case "item/completed": {
+				if (params.item?.type === "contextCompaction") {
+					this.emit("event", {
+						type: "thread-compaction-completed",
+						threadId: params.threadId,
+						turnId: typeof params.turnId === "string" ? params.turnId : null,
+						itemId: typeof params.item?.id === "string" ? params.item.id : null,
+						source: "contextCompaction",
+					} satisfies CodexClientEvent);
+					return;
+				}
 				const activity = activityFromItem(params.item, "completed");
 				if (activity) {
 					this.emit("event", {

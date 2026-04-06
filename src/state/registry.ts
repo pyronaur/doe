@@ -1,6 +1,11 @@
 import { EventEmitter } from "node:events";
 import type { AgentActivity } from "../codex/client.js";
-import { deriveUsageSnapshot, type AgentUsageSnapshot, type ThreadTokenUsage } from "../context-usage.js";
+import {
+	deriveUsageSnapshot,
+	type CurrentContextUsage,
+	type AgentCompactionState,
+	type AgentUsageSnapshot,
+} from "../context-usage.js";
 
 export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_input";
 export type NotificationMode = "wait_all" | "notify_each";
@@ -32,6 +37,7 @@ export interface AgentRecord {
 	latestFinalOutput?: string | null;
 	lastError?: string | null;
 	usage?: AgentUsageSnapshot | null;
+	compaction?: AgentCompactionState | null;
 	startedAt: number;
 	completedAt?: number | null;
 	parentBatchId?: string | null;
@@ -119,7 +125,20 @@ function cloneAgent(agent: AgentRecord): AgentRecord {
 			total: { ...agent.usage.total },
 			last: { ...agent.usage.last },
 		} : null,
+		compaction: agent.compaction ? { ...agent.compaction } : null,
 		historyHydratedAt: agent.historyHydratedAt ?? null,
+	};
+}
+
+function createCompactionState(previous?: AgentCompactionState | null): AgentCompactionState {
+	return {
+		inProgress: previous?.inProgress ?? false,
+		count: previous?.count ?? 0,
+		lastStartedAt: previous?.lastStartedAt ?? null,
+		lastCompletedAt: previous?.lastCompletedAt ?? null,
+		lastTurnId: previous?.lastTurnId ?? null,
+		lastItemId: previous?.lastItemId ?? null,
+		lastSignal: previous?.lastSignal ?? null,
 	};
 }
 
@@ -311,11 +330,50 @@ export class DoeRegistry extends EventEmitter {
 		}));
 	}
 
-	markTokenUsage(threadId: string, turnId: string | null, tokenUsage: ThreadTokenUsage) {
+	markTokenUsage(threadId: string, turnId: string | null, usage: CurrentContextUsage) {
 		this.updateAgentByThread(threadId, (agent) => ({
 			...agent,
-			usage: deriveUsageSnapshot(tokenUsage, turnId),
+			usage: deriveUsageSnapshot(usage, turnId),
 		}));
+	}
+
+	markCompactionStarted(threadId: string, details: { turnId?: string | null; itemId?: string | null }) {
+		this.updateAgentByThread(threadId, (agent) => {
+			const compaction = createCompactionState(agent.compaction);
+			return {
+				...agent,
+				compaction: {
+					...compaction,
+					inProgress: true,
+					lastStartedAt: Date.now(),
+					lastTurnId: details.turnId ?? compaction.lastTurnId ?? null,
+					lastItemId: details.itemId ?? null,
+					lastSignal: "contextCompaction",
+				},
+			};
+		});
+	}
+
+	markCompactionCompleted(
+		threadId: string,
+		details: { turnId?: string | null; itemId?: string | null; source: "contextCompaction" | "thread/compacted" },
+	) {
+		this.updateAgentByThread(threadId, (agent) => {
+			const compaction = createCompactionState(agent.compaction);
+			const sameTurn = compaction.lastCompletedAt !== null && compaction.lastTurnId === (details.turnId ?? null);
+			return {
+				...agent,
+				compaction: {
+					...compaction,
+					inProgress: false,
+					count: sameTurn ? compaction.count : compaction.count + 1,
+					lastCompletedAt: Date.now(),
+					lastTurnId: details.turnId ?? compaction.lastTurnId ?? null,
+					lastItemId: details.itemId ?? compaction.lastItemId ?? null,
+					lastSignal: details.source,
+				},
+			};
+		});
 	}
 
 	appendUserMessage(agentId: string, turnId: string, text: string) {
@@ -545,7 +603,7 @@ export class DoeRegistry extends EventEmitter {
 
 	serialize(): PersistedRegistrySnapshot {
 		return {
-			version: 2,
+			version: 3,
 			savedAt: Date.now(),
 			agents: this.listAgents(),
 			batches: this.listBatches(),
@@ -574,6 +632,7 @@ export class DoeRegistry extends EventEmitter {
 								: "thinking"),
 				recovered: true,
 				messages: (agent.messages ?? []).map(cloneMessage),
+				compaction: agent.compaction ? createCompactionState(agent.compaction) : null,
 				historyHydratedAt: agent.historyHydratedAt ?? null,
 			});
 		}

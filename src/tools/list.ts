@@ -4,7 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { DoeRegistry } from "../state/registry.js";
 import { truncateForDisplay } from "../codex/client.js";
-import { formatUsageCompact } from "../context-usage.js";
+import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 
 const StateSchema = StringEnum(["working", "completed", "error", "awaiting_input"] as const);
 
@@ -39,8 +39,10 @@ export function registerListTool(pi: ExtensionAPI, deps: { registry: DoeRegistry
 			const batches = params.includeBatches ? deps.registry.listBatches(12) : [];
 			const lines = agents.length
 				? agents.map(
-					(agent) =>
-						`- ${agent.id} :: ${agent.name} [${agent.state}] ${agent.model} mode=${agent.allowWrite ? "write" : "read-only"} ${formatUsageCompact(agent.usage)} cwd=${agent.cwd} latest=${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, 120)}`,
+					(agent) => {
+						const compaction = formatCompactionSignal(agent.compaction);
+						return `- ${agent.id} :: ${agent.name} [${agent.state}] ${agent.model} mode=${agent.allowWrite ? "write" : "read-only"} ${formatUsageCompact(agent.usage)}${compaction ? ` ${compaction}` : ""} cwd=${agent.cwd} latest=${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, 120)}`;
+					},
 				)
 				: ["No matching agents."];
 			if (batches.length > 0) {
