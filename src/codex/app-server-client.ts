@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import readline from "node:readline";
 import type { CurrentContextUsage } from "../context-usage.ts";
+import { isRecord } from "../utils/guards.ts";
 import {
 	handleAppServerNotification,
 	normalizeCurrentContextUsage,
@@ -10,9 +11,9 @@ import {
 	buildDangerFullAccessSandbox,
 	buildReadOnlySandbox,
 	type CodexClientEvent,
+	type SandboxMode,
 	type ThreadStartOptions,
 	type ThreadSummary,
-	type SandboxMode,
 	type TurnStartOptions,
 	type TurnSteerOptions,
 } from "./client.ts";
@@ -22,12 +23,8 @@ interface PendingRequest {
 	reject: (error: Error) => void;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function buildSandboxPolicy(sandbox: SandboxMode, networkAccess = false) {
-	if (sandbox === "read-only") {return buildReadOnlySandbox(networkAccess);}
+	if (sandbox === "read-only") { return buildReadOnlySandbox(networkAccess); }
 	if (sandbox === "workspace-write") {
 		return {
 			type: "workspaceWrite",
@@ -55,7 +52,7 @@ export class CodexAppServerClient extends EventEmitter {
 	}
 
 	async ensureStarted(): Promise<void> {
-		if (this.proc) {return;}
+		if (this.proc) { return; }
 		if (this.starting) {
 			await this.starting;
 			return;
@@ -69,7 +66,7 @@ export class CodexAppServerClient extends EventEmitter {
 			});
 			this.proc.stderr.on("data", (data) => {
 				const text = String(data).trim();
-				if (text) {console.error(`[doe/codex] ${text}`);}
+				if (text) { console.error(`[doe/codex] ${text}`); }
 			});
 			this.proc.on("exit", (code, signal) => {
 				const reason = `Codex app-server exited (code=${code ?? "null"}, signal=${
@@ -190,7 +187,8 @@ export class CodexAppServerClient extends EventEmitter {
 			input: [{ type: "text", text: options.prompt }],
 			cwd: options.cwd,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandboxPolicy: buildSandboxPolicy(options.sandbox ?? "danger-full-access", options.networkAccess ?? false),
+			sandboxPolicy: buildSandboxPolicy(options.sandbox ?? "danger-full-access",
+				options.networkAccess ?? false),
 			model: options.model,
 			effort: options.effort ?? "medium",
 		});
@@ -231,7 +229,7 @@ export class CodexAppServerClient extends EventEmitter {
 	}
 
 	private send(message: Record<string, unknown>) {
-		if (!this.proc?.stdin.writable) {throw new Error("Codex app-server stdin is not writable");}
+		if (!this.proc?.stdin.writable) { throw new Error("Codex app-server stdin is not writable"); }
 		this.proc.stdin.write(`${JSON.stringify(message)}\n`);
 	}
 
@@ -250,7 +248,7 @@ export class CodexAppServerClient extends EventEmitter {
 
 	private handleLine(line: string) {
 		const message = this.parseLine(line);
-		if (!message) {return;}
+		if (!message) { return; }
 		const requestId = typeof message.id === "number" ? message.id : null;
 		const method = typeof message.method === "string" ? message.method : null;
 		const params = isRecord(message.params) ? message.params : {};
@@ -263,11 +261,11 @@ export class CodexAppServerClient extends EventEmitter {
 			this.handleResponse(requestId, message);
 			return;
 		}
-		if (method) {this.handleNotification(method, params);}
+		if (method) { this.handleNotification(method, params); }
 	}
 
 	private parseLine(line: string): Record<string, unknown> | null {
-		if (!line.trim()) {return null;}
+		if (!line.trim()) { return null; }
 		let message: unknown;
 		try {
 			message = JSON.parse(line);
@@ -284,7 +282,7 @@ export class CodexAppServerClient extends EventEmitter {
 
 	private handleResponse(requestId: number, message: Record<string, unknown>) {
 		const pending = this.pending.get(requestId);
-		if (!pending) {return;}
+		if (!pending) { return; }
 		this.pending.delete(requestId);
 		if (isRecord(message.error)) {
 			const errorMessage = typeof message.error.message === "string"

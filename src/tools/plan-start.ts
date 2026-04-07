@@ -2,9 +2,8 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
-import type { CodexAppServerClient } from "../codex/app-server-client.ts";
 import { truncateForDisplay } from "../codex/client.ts";
-import { formatCompactionSignal, formatUsageCompact } from "../context-usage.ts";
+import { formatUsageCompact } from "../context-usage.ts";
 import {
 	deletePlanFileIfEmpty,
 	ensurePlanFile,
@@ -16,23 +15,18 @@ import {
 	renderPlanPrompt,
 } from "../plan/flow.ts";
 import type { DoePlanReviewResult } from "../plan/review.ts";
-import type { DoePlanState } from "../plan/session-state.ts";
-import type { DoeRegistry } from "../roster/registry.ts";
-
-interface PlanStartToolDeps {
-	client: CodexAppServerClient;
-	registry: DoeRegistry;
-	templatesDir: string;
-	reviewPlan: (
-		input: { planFilePath: string; cwd: string; signal?: AbortSignal },
-	) => Promise<DoePlanReviewResult>;
-	getSessionSlug: () => string | null;
-	getPlanState: () => DoePlanState;
-	setPlanState: (
-		updater: (state: DoePlanState) => DoePlanState,
-		options?: { flush?: boolean },
-	) => DoePlanState;
-}
+import { resolveAgentFinalOutput } from "./agent-final-output.ts";
+import { formatContextStatusLines } from "./context-status.ts";
+import {
+	formatPlanReviewSummary,
+	formatPlanRevisionNextStep,
+	type PlanWorkflowToolDeps,
+	setPlanReadyForReview,
+	setPlanReviewOutcome,
+} from "./plan-workflow.ts";
+import { renderToolResultText } from "./tool-render.ts";
+import { recordStartedTurn } from "./turn-start.ts";
+type PlanStartToolDeps = PlanWorkflowToolDeps;
 
 interface PlanStartWorkflowInput {
 	deps: PlanStartToolDeps;
@@ -55,31 +49,6 @@ interface PlanStartResultInput {
 	sessionSlug: string;
 	finalAgent: any;
 	review: DoePlanReviewResult;
-}
-
-function resolveAgentFinalOutput(agent: any): string {
-	const lastAgentMessage = [...(agent?.messages ?? [])]
-		.reverse()
-		.find((message: any) =>
-			message?.role === "agent" && typeof message?.text === "string"
-			&& message.text.trim().length > 0
-		)?.text;
-	return agent?.latestFinalOutput ?? lastAgentMessage ?? agent?.latestSnippet ?? "Completed";
-}
-
-function formatPlanReviewSummary(review: DoePlanReviewResult): string[] {
-	if (!review.feedback) {return [];}
-	return ["", "<review_feedback>", review.feedback, "</review_feedback>"];
-}
-
-function formatPlanStartNextStep(review: DoePlanReviewResult): string[] {
-	if (review.status !== "needs_revision") {return [];}
-	return [
-		"",
-		"<next_step>",
-		"Review feedback is stored automatically. Use plan_resume with Director commentary only.",
-		"</next_step>",
-	];
 }
 
 const PLAN_START_TOOL_META = {
@@ -242,30 +211,21 @@ async function startPlanDraft(
 		networkAccess: false,
 		allowWrite: true,
 	});
-	deps.registry.markThreadAttached(context.agentId, {
+	recordStartedTurn(deps.registry, {
+		agentId: context.agentId,
 		threadId: thread.thread.id,
-		activeTurnId: turn.turn.id,
+		turnId: turn.turn.id,
+		prompt: context.prompt,
 	});
-	deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
-	deps.registry.appendUserMessage(context.agentId, turn.turn.id, context.prompt);
 }
 
 async function finishPlanStart(input: PlanStartFinishInput) {
 	const { deps, context, agentId, signal, onUpdate } = input;
 	const finalAgent = await deps.registry.waitForAgent(agentId, signal);
 	readPlanFile(context.planFile.planFilePath);
-	deps.setPlanState(
-		(current) => ({
-			...current,
-			activePlan: current.activePlan?.agentId === agentId
-				? {
-					...current.activePlan,
-					status: "ready_for_review",
-					reviewFeedback: null,
-				}
-				: current.activePlan,
-		}),
-		{ flush: true },
+	setPlanReadyForReview(
+		deps.setPlanState,
+		(activePlan) => activePlan.agentId === agentId,
 	);
 	onUpdate?.({
 		content: [{
@@ -287,20 +247,10 @@ async function finishPlanStart(input: PlanStartFinishInput) {
 		throw new Error(`${reason}\nUse plan_resume to retry review for the same plan workflow.`);
 	}
 
-	deps.setPlanState(
-		(current) => ({
-			...current,
-			activePlan: current.activePlan?.agentId === agentId
-				? review.status === "approved"
-					? null
-					: {
-						...current.activePlan,
-						status: "needs_revision",
-						reviewFeedback: review.feedback,
-					}
-				: current.activePlan,
-		}),
-		{ flush: true },
+	setPlanReviewOutcome(
+		deps.setPlanState,
+		(activePlan) => activePlan.agentId === agentId,
+		review,
 	);
 
 	return { finalAgent, review };
@@ -316,13 +266,11 @@ function buildPlanStartResult(input: PlanStartResultInput) {
 				`plan_slug: ${context.planFile.planSlug}`,
 				`state: ${review.status}`,
 				`context: ${formatUsageCompact(finalAgent.usage)}`,
-				...(formatCompactionSignal(finalAgent.compaction)
-					? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`]
-					: []),
+				...formatContextStatusLines(finalAgent.compaction),
 				`plan_file: ${context.planFile.planFilePath}`,
 				`review_status: ${review.status}`,
 				...formatPlanReviewSummary(review),
-				...formatPlanStartNextStep(review),
+				...formatPlanRevisionNextStep(review),
 				"",
 				resolveAgentFinalOutput(finalAgent),
 				...(review.status === "approved" ? ["", "Plan approved. Workflow cleared."] : []),
@@ -397,7 +345,7 @@ function createPlanStartTool(deps: PlanStartToolDeps) {
 			return new Text(theme.fg("accent", `plan_start ${args.planSlug ?? ""}`.trim()), 0, 0);
 		},
 		renderResult(result, _options, theme) {
-			return new Text(theme.fg("accent", result.content?.[0]?.text ?? "plan_start"), 0, 0);
+			return renderToolResultText(theme, result, "plan_start");
 		},
 		async execute(
 			...args: [string, any, AbortSignal | undefined, ((update: any) => void) | undefined]

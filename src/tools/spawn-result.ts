@@ -1,6 +1,7 @@
-import { truncateForDisplay } from "../codex/client.js";
-import { formatCompactionSignal } from "../context-usage.js";
-import { formatAgentCapacity } from "../agent-capacity.js";
+import { formatAgentCapacity } from "../agent-capacity.ts";
+import { truncateForDisplay } from "../codex/client.ts";
+import { resolveAgentFinalOutput } from "./agent-final-output.ts";
+import { formatContextStatusLines } from "./context-status.ts";
 
 interface SpawnResultMessage {
 	content?: Array<{ type?: string; text?: string }>;
@@ -12,15 +13,12 @@ interface SpawnResultMessage {
 
 function summarizeAgents(agents: Array<any>, maxSnippet = 120): string {
 	return agents
-		.map((agent) => `${`- ${agent.name} [${agent.state}] ${agent.model} ${formatAgentCapacity(agent)}`} — ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, maxSnippet)}`)
+		.map((agent) =>
+			`${`- ${agent.name} [${agent.state}] ${agent.model} ${formatAgentCapacity(agent)}`} — ${
+				truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, maxSnippet)
+			}`
+		)
 		.join("\n");
-}
-
-function resolveAgentFinalOutput(agent: any): string {
-	const lastAgentMessage = [...(agent?.messages ?? [])]
-		.reverse()
-		.find((message: any) => message?.role === "agent" && typeof message?.text === "string" && message.text.trim().length > 0)?.text;
-	return agent?.latestFinalOutput ?? lastAgentMessage ?? agent?.latestSnippet ?? "Completed";
 }
 
 export function formatSpawnAgentResult(agent: any, input: { prompt?: string | null } = {}): string {
@@ -31,7 +29,7 @@ export function formatSpawnAgentResult(agent: any, input: { prompt?: string | nu
 		`capacity: ${formatAgentCapacity(agent)}`,
 		`model: ${agent.model}`,
 		`effort: ${agent.effort ?? "?"}`,
-		...(formatCompactionSignal(agent.compaction) ? [`context_status: ${formatCompactionSignal(agent.compaction)}`] : []),
+		...formatContextStatusLines(agent.compaction),
 		"",
 		"prompt:",
 		prompt,
@@ -41,15 +39,25 @@ export function formatSpawnAgentResult(agent: any, input: { prompt?: string | nu
 	].join("\n");
 }
 
-export function formatSpawnBatchResults(agents: any[], promptsByAgentId: Record<string, string> = {}): string {
+export function formatSpawnBatchResults(
+	agents: any[],
+	promptsByAgentId: Record<string, string> = {},
+): string {
 	return agents
-		.map((agent, index) => [`## ${index + 1}. ${agent.name}`, formatSpawnAgentResult(agent, { prompt: promptsByAgentId[agent.id] ?? null })].join("\n"))
+		.map((agent, index) =>
+			[
+				`## ${index + 1}. ${agent.name}`,
+				formatSpawnAgentResult(agent, { prompt: promptsByAgentId[agent.id] ?? null }),
+			].join("\n")
+		)
 		.join("\n\n---\n\n");
 }
 
 export function resolveSpawnRenderBody(result: SpawnResultMessage): string {
-	const text = result.content?.find((entry) => entry.type === "text" && typeof entry.text === "string")?.text?.trim();
-	if (text) return text;
+	const text = result.content?.find((entry) =>
+		entry.type === "text" && typeof entry.text === "string"
+	)?.text?.trim();
+	if (text) { return text; }
 	const agents = Array.isArray(result.details?.agents) ? result.details?.agents : [];
 	return agents.length > 0 ? summarizeAgents(agents) : "Spawned";
 }

@@ -1,15 +1,19 @@
-import { Type } from "@sinclair/typebox";
-import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import type { DoePlanState } from "../plan/session-state.js";
-import type { DoeRegistry } from "../roster/registry.js";
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+import type { CodexAppServerClient } from "../codex/app-server-client.ts";
+import type { DoePlanState } from "../plan/session-state.ts";
+import type { DoeRegistry } from "../roster/registry.ts";
+import { renderToolResultText } from "./tool-render.ts";
 
 interface PlanStopToolDeps {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
 	getPlanState: () => DoePlanState;
-	setPlanState: (updater: (state: DoePlanState) => DoePlanState, options?: { flush?: boolean }) => DoePlanState;
+	setPlanState: (
+		updater: (state: DoePlanState) => DoePlanState,
+		options?: { flush?: boolean },
+	) => DoePlanState;
 }
 
 export function registerPlanStopTool(pi: ExtensionAPI, deps: PlanStopToolDeps) {
@@ -26,7 +30,7 @@ export function registerPlanStopTool(pi: ExtensionAPI, deps: PlanStopToolDeps) {
 			return new Text(theme.fg("accent", "plan_stop"), 0, 0);
 		},
 		renderResult(result, _options, theme) {
-			return new Text(theme.fg("accent", result.content?.[0]?.text ?? "plan_stop"), 0, 0);
+			return renderToolResultText(theme, result, "plan_stop");
 		},
 		async execute() {
 			const state = deps.getPlanState();

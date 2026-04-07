@@ -1,12 +1,11 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { extractThreadTranscript, truncateForDisplay } from "../codex/client.js";
-import { formatUsageBreakdown } from "../context-usage.js";
-import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import type { DoeRegistry } from "../roster/registry.js";
-import { SEAT_ROLE_LABELS, SEAT_ROLES } from "../roster/config.js";
-import type { AgentRecord } from "../roster/types.js";
-import { formatAgentProgressLine } from "./agent-progress.js";
+import type { CodexAppServerClient } from "../codex/app-server-client.ts";
+import { extractThreadTranscript, truncateForDisplay } from "../codex/client.ts";
+import { formatUsageBreakdown } from "../context-usage.ts";
+import { SEAT_ROLE_LABELS, SEAT_ROLES } from "../roster/config.ts";
+import type { DoeRegistry } from "../roster/registry.ts";
+import type { AgentRecord } from "../roster/types.ts";
+import { formatAgentProgressLine } from "./agent-progress.ts";
 
 type ViewMode = "list" | "detail";
 
@@ -21,7 +20,7 @@ interface AgentLiveViewOptions {
 }
 
 function wrapText(text: string, width: number): string[] {
-	if (width <= 0) return [""];
+	if (width <= 0) { return [""]; }
 	const source = text.replace(/\r\n?/g, "\n").split("\n");
 	const lines: string[] = [];
 
@@ -48,8 +47,12 @@ function wrapText(text: string, width: number): string[] {
 }
 
 function formatTimestamp(value: number | null | undefined): string {
-	if (!value) return "n/a";
-	return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+	if (!value) { return "n/a"; }
+	return new Date(value).toLocaleTimeString([], {
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+	});
 }
 
 function listViewportSize(): number {
@@ -61,7 +64,7 @@ function detailViewportSize(): number {
 	return 12;
 }
 
-class AgentLiveViewComponent {
+export class AgentLiveViewComponent {
 	private readonly registry: DoeRegistry;
 	private readonly client: CodexAppServerClient;
 	private readonly theme: any;
@@ -132,31 +135,32 @@ class AgentLiveViewComponent {
 	}
 
 	private selectedAgent(agents: AgentRecord[]): AgentRecord | null {
-		if (!this.selectedAgentId) return null;
+		if (!this.selectedAgentId) { return null; }
 		return agents.find((agent) => agent.id === this.selectedAgentId) ?? null;
 	}
 
 	private moveSelection(delta: number) {
 		const agents = this.ensureSelection();
-		if (agents.length === 0) return;
-		const currentIndex = Math.max(0, agents.findIndex((agent) => agent.id === this.selectedAgentId));
+		if (agents.length === 0) { return; }
+		const currentIndex = Math.max(0,
+			agents.findIndex((agent) => agent.id === this.selectedAgentId));
 		const nextIndex = Math.max(0, Math.min(agents.length - 1, currentIndex + delta));
-		this.selectedAgentId = agents[nextIndex]!.id;
+		this.selectedAgentId = agents[nextIndex].id;
 		this.requestRender();
 	}
 
 	private moveSelectionTo(index: number) {
 		const agents = this.ensureSelection();
-		if (agents.length === 0) return;
+		if (agents.length === 0) { return; }
 		const nextIndex = Math.max(0, Math.min(agents.length - 1, index));
-		this.selectedAgentId = agents[nextIndex]!.id;
+		this.selectedAgentId = agents[nextIndex].id;
 		this.requestRender();
 	}
 
 	private openDetail() {
 		const agents = this.ensureSelection();
 		const agent = this.selectedAgent(agents);
-		if (!agent) return;
+		if (!agent) { return; }
 		this.mode = "detail";
 		this.detailAgentId = agent.id;
 		this.detailScrollTop = null;
@@ -166,9 +170,9 @@ class AgentLiveViewComponent {
 	}
 
 	private async ensureHistory(agent: AgentRecord) {
-		if (!agent.threadId) return;
-		if (agent.historyHydratedAt) return;
-		if (this.hydratingAgentId === agent.id) return;
+		if (!agent.threadId) { return; }
+		if (agent.historyHydratedAt) { return; }
+		if (this.hydratingAgentId === agent.id) { return; }
 		this.hydratingAgentId = agent.id;
 		this.requestRender();
 		try {
@@ -186,7 +190,7 @@ class AgentLiveViewComponent {
 
 	private async ensureInitialDetail() {
 		const agent = this.detailAgentId ? this.registry.getAgent(this.detailAgentId) : null;
-		if (!agent) return;
+		if (!agent) { return; }
 		await this.ensureHistory(agent);
 	}
 
@@ -234,14 +238,22 @@ class AgentLiveViewComponent {
 			return;
 		}
 
-		const step = matchesKey(data, "pageup") ? -8 : matchesKey(data, "pagedown") ? 8 : matchesKey(data, Key.up) || data === "k" ? -1 : matchesKey(data, Key.down) || data === "j" ? 1 : 0;
-		if (step === 0) return;
+		const step = matchesKey(data, "pageup")
+			? -8
+			: matchesKey(data, "pagedown")
+			? 8
+			: matchesKey(data, Key.up) || data === "k"
+			? -1
+			: matchesKey(data, Key.down) || data === "j"
+			? 1
+			: 0;
+		if (step === 0) { return; }
 		this.scrollDetail(step);
 	}
 
 	private scrollDetail(delta: number) {
 		const agent = this.detailAgentId ? this.registry.getAgent(this.detailAgentId) : null;
-		if (!agent) return;
+		if (!agent) { return; }
 		const lines = this.buildDetailBodyLines(agent, this.detailBodyWidth);
 		const maxStart = Math.max(0, lines.length - detailViewportSize());
 		const current = this.detailScrollTop ?? maxStart;
@@ -254,7 +266,9 @@ class AgentLiveViewComponent {
 		const inner = Math.max(20, width - 2);
 		const titleText = ` ${title} `;
 		const titleWidth = Math.min(inner, titleText.length);
-		const trimmedTitle = titleText.length > titleWidth ? `${titleText.slice(0, titleWidth - 1)}…` : titleText;
+		const trimmedTitle = titleText.length > titleWidth
+			? `${titleText.slice(0, titleWidth - 1)}…`
+			: titleText;
 		const sideWidth = Math.max(0, inner - trimmedTitle.length);
 		const left = Math.floor(sideWidth / 2);
 		const right = sideWidth - left;
@@ -264,64 +278,112 @@ class AgentLiveViewComponent {
 		for (const line of body) {
 			const content = truncateToWidth(line, inner);
 			const padding = " ".repeat(Math.max(0, inner - visibleWidth(content)));
-			lines.push(`${this.theme.fg("border", "│")}${content}${padding}${this.theme.fg("border", "│")}`);
+			lines.push(
+				`${this.theme.fg("border", "│")}${content}${padding}${this.theme.fg("border", "│")}`,
+			);
 		}
 		lines.push(bottom);
 		return lines;
 	}
 
-	private renderList(width: number): string[] {
-		const inner = Math.max(20, width - 2);
-		const agents = this.ensureSelection();
-		const body: string[] = [];
-		if (agents.length === 0) {
-			body.push(this.theme.fg("dim", " No occupied ICs"));
-			body.push(this.theme.fg("dim", " Use codex_spawn to delegate work"));
-			return this.renderFrame("DoE Occupied Roster", width, body);
-		}
+	private renderEmptyList(width: number): string[] {
+		const body: string[] = [
+			this.theme.fg("dim", " No occupied ICs"),
+			this.theme.fg("dim", " Use codex_spawn to delegate work"),
+		];
+		return this.renderFrame("DoE Occupied Roster", width, body);
+	}
 
+	private resolveListPage(
+		agents: AgentRecord[],
+	): { selectedId: string | null; pageStart: number; page: AgentRecord[] } {
 		const selectedId = this.selectedAgentId;
 		const selectedIndex = Math.max(0, agents.findIndex((agent) => agent.id === selectedId));
 		const pageSize = listViewportSize();
 		const pageStart = Math.max(0, Math.min(selectedIndex, Math.max(0, agents.length - pageSize)));
-		const page = agents.slice(pageStart, pageStart + pageSize);
-		const summaries = this.registry.getRosterRoleSummaries();
+		return {
+			selectedId,
+			pageStart,
+			page: agents.slice(pageStart, pageStart + pageSize),
+		};
+	}
 
-		body.push(this.theme.fg("accent", ` Occupied ICs ${agents.length}`));
+	private pushRoleSummaryLines(body: string[], summaries: any[]) {
 		for (const role of SEAT_ROLES) {
 			const summary = summaries.find((entry) => entry.role === role);
-			if (!summary || summary.activeCount === 0) continue;
+			if (!summary || summary.activeCount === 0) {
+				continue;
+			}
 			body.push(this.theme.fg("muted", ` ${SEAT_ROLE_LABELS[role]}: ${summary.names.join(", ")}`));
 		}
+	}
+
+	private pushListAgentLines(input: {
+		body: string[];
+		agents: AgentRecord[];
+		page: AgentRecord[];
+		pageStart: number;
+		selectedId: string | null;
+		inner: number;
+	}) {
+		for (const [offset, agent] of input.page.entries()) {
+			const absoluteIndex = input.pageStart + offset;
+			const selected = agent.id === input.selectedId;
+			const marker = selected ? this.theme.fg("accent", "›") : " ";
+			const title = truncateToWidth(`${absoluteIndex + 1}. ${agent.name}`, input.inner - 2);
+			const meta = truncateToWidth(
+				formatAgentProgressLine(agent, { includeName: false }),
+				input.inner - 2,
+			);
+			const preview = truncateToWidth(
+				truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, input.inner - 6)
+					|| "(no transcript yet)",
+				input.inner - 2,
+			);
+			input.body.push(`${marker} ${selected ? this.theme.fg("accent", title) : title}`);
+			input.body.push(
+				`  ${selected ? this.theme.fg("warning", meta) : this.theme.fg("muted", meta)}`,
+			);
+			input.body.push(`  ${this.theme.fg("dim", preview)}`);
+			if (absoluteIndex < input.agents.length - 1) {
+				input.body.push(this.theme.fg("border", "─".repeat(Math.max(0, input.inner - 1))));
+			}
+		}
+	}
+
+	private renderList(width: number): string[] {
+		const inner = Math.max(20, width - 2);
+		const agents = this.ensureSelection();
+		if (agents.length === 0) {
+			return this.renderEmptyList(width);
+		}
+		const { selectedId, pageStart, page } = this.resolveListPage(agents);
+		const summaries = this.registry.getRosterRoleSummaries();
+		const body: string[] = [];
+		body.push(this.theme.fg("accent", ` Occupied ICs ${agents.length}`));
+		this.pushRoleSummaryLines(body, summaries);
 		body.push(this.theme.fg("muted", " Up/Down move | Enter detail | Esc close"));
 		body.push("");
-
-		for (const [offset, agent] of page.entries()) {
-			const absoluteIndex = pageStart + offset;
-			const selected = agent.id === selectedId;
-			const marker = selected ? this.theme.fg("accent", "›") : " ";
-			const title = truncateToWidth(`${absoluteIndex + 1}. ${agent.name}`, inner - 2);
-			const meta = truncateToWidth(formatAgentProgressLine(agent, { includeName: false }), inner - 2);
-			const preview = truncateToWidth(truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, inner - 6) || "(no transcript yet)", inner - 2);
-			body.push(`${marker} ${selected ? this.theme.fg("accent", title) : title}`);
-			body.push(`  ${selected ? this.theme.fg("warning", meta) : this.theme.fg("muted", meta)}`);
-			body.push(`  ${this.theme.fg("dim", preview)}`);
-			if (absoluteIndex < agents.length - 1) body.push(this.theme.fg("border", "─".repeat(Math.max(0, inner - 1))));
-		}
-
+		this.pushListAgentLines({ body, agents, page, pageStart, selectedId, inner });
 		return this.renderFrame("DoE Occupied Roster", width, body);
 	}
 
 	private buildDetailBodyLines(agent: AgentRecord, width: number): string[] {
 		const lines: string[] = [];
-		const messages = agent.messages.length > 0 ? agent.messages : this.registry.getAgentMessages(agent.id);
+		const messages = agent.messages.length > 0
+			? agent.messages
+			: this.registry.getAgentMessages(agent.id);
 		const messageWidth = Math.max(16, width - 4);
 
 		if (this.hydratingAgentId === agent.id) {
 			lines.push(this.theme.fg("warning", " Hydrating history from thread/read..."));
 			lines.push("");
-		} else if (this.hydrationError) {
-			lines.push(this.theme.fg("error", ` History hydration failed: ${truncateForDisplay(this.hydrationError, width - 4)}`));
+		}
+		if (this.hydrationError && this.hydratingAgentId !== agent.id) {
+			lines.push(
+				this.theme.fg("error",
+					` History hydration failed: ${truncateForDisplay(this.hydrationError, width - 4)}`),
+			);
 			lines.push("");
 		}
 
@@ -333,7 +395,9 @@ class AgentLiveViewComponent {
 		for (const message of messages) {
 			const label = message.role === "user" ? "USER" : "AGENT";
 			const suffix = message.streaming ? " • streaming" : "";
-			lines.push(this.theme.fg(message.role === "user" ? "accent" : "success", ` ${label}${suffix}`));
+			lines.push(
+				this.theme.fg(message.role === "user" ? "accent" : "success", ` ${label}${suffix}`),
+			);
 			for (const textLine of wrapText(message.text || "(empty)", messageWidth)) {
 				lines.push(`   ${textLine}`);
 			}
@@ -356,7 +420,11 @@ class AgentLiveViewComponent {
 		body.push(` ${formatAgentProgressLine(agent)}`);
 		body.push(` ${agent.model} | ${agent.allowWrite ? "write" : "read-only"}`);
 		body.push(` cwd: ${truncateForDisplay(agent.cwd, inner - 6)}`);
-		body.push(` started: ${formatTimestamp(agent.startedAt)} | completed: ${formatTimestamp(agent.completedAt ?? null)}`);
+		body.push(
+			` started: ${formatTimestamp(agent.startedAt)} | completed: ${
+				formatTimestamp(agent.completedAt ?? null)
+			}`,
+		);
 		for (const line of formatUsageBreakdown(agent.usage, agent.compaction)) {
 			body.push(` ${truncateForDisplay(line, inner - 4)}`);
 		}
@@ -371,104 +439,12 @@ class AgentLiveViewComponent {
 			body.push(line);
 		}
 		if (contentLines.length > viewport) {
-			body.push(this.theme.fg("muted", ` ${Math.min(start + viewport, contentLines.length)}/${contentLines.length}`));
+			body.push(
+				this.theme.fg("muted",
+					` ${Math.min(start + viewport, contentLines.length)}/${contentLines.length}`),
+			);
 		}
 
 		return this.renderFrame("IC Detail", width, body);
-	}
-}
-
-export class AgentLiveViewController {
-	private handle: any = null;
-	private opened = false;
-	private ticker: ReturnType<typeof setInterval> | null = null;
-	private nextOpen: { mode?: ViewMode; agentId?: string | null } | null = null;
-
-	constructor(
-		private readonly registry: DoeRegistry,
-		private readonly client: CodexAppServerClient,
-	) {}
-
-	toggle(ctx: ExtensionContext, nextOpen: { mode?: ViewMode; agentId?: string | null } = {}) {
-		if (this.opened) {
-			this.close();
-			return;
-		}
-		this.open(ctx, nextOpen);
-	}
-
-	openList(ctx: ExtensionContext) {
-		if (this.opened) {
-			this.close();
-		}
-		this.open(ctx, { mode: "list" });
-	}
-
-	openAgentDetail(ctx: ExtensionContext, agentId: string) {
-		if (this.opened) {
-			this.close();
-		}
-		this.open(ctx, { mode: "detail", agentId });
-	}
-
-	requestRender() {
-		if (this.handle && typeof this.handle.requestRender === "function") {
-			this.handle.requestRender();
-		}
-	}
-
-	close() {
-		if (this.ticker) {
-			clearInterval(this.ticker);
-			this.ticker = null;
-		}
-		if (this.handle && typeof this.handle.close === "function") {
-			this.handle.close();
-		}
-		this.handle = null;
-		this.opened = false;
-	}
-
-	private open(ctx: ExtensionContext, nextOpen: { mode?: ViewMode; agentId?: string | null } = {}) {
-		if (!ctx.hasUI || this.opened) return;
-		this.nextOpen = nextOpen;
-		this.opened = true;
-		ctx.ui.custom(
-			(tui, theme, _kb, done) =>
-				new AgentLiveViewComponent({
-					registry: this.registry,
-					client: this.client,
-					theme,
-					initialMode: this.nextOpen?.mode,
-					initialAgentId: this.nextOpen?.agentId ?? null,
-					done: () => {
-						this.opened = false;
-						this.handle = null;
-						this.nextOpen = null;
-						if (this.ticker) {
-							clearInterval(this.ticker);
-							this.ticker = null;
-						}
-						done(null);
-					},
-					requestRender: () => tui.requestRender(),
-				}) as any,
-			{
-				overlay: true,
-				overlayOptions: {
-					anchor: "center",
-					width: "82%",
-					minWidth: 76,
-					maxHeight: "86%",
-					margin: 1,
-				},
-				onHandle: (handle: any) => {
-					this.handle = handle;
-				},
-			},
-		);
-		if (!this.ticker) {
-			this.ticker = setInterval(() => this.requestRender(), 1000);
-		}
 	}
 }

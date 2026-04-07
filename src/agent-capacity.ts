@@ -1,4 +1,8 @@
-import { isUsageSnapshotStale, type AgentCompactionState, type AgentUsageSnapshot } from "./context-usage.js";
+import {
+	type AgentCompactionState,
+	type AgentUsageSnapshot,
+	isUsageSnapshotStale,
+} from "./context-usage.ts";
 
 export interface AgentCapacityShape {
 	usage?: AgentUsageSnapshot | null;
@@ -8,8 +12,8 @@ export interface AgentCapacityShape {
 
 export function formatAgentCapacity(input: AgentCapacityShape): string {
 	const usedPercent = input.usage?.usedPercent;
-	if (input.recovered) return "?";
-	if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent)) return "?";
-	if (isUsageSnapshotStale(input.usage ?? null, input.compaction ?? null)) return "?";
+	if (input.recovered) { return "?"; }
+	if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent)) { return "?"; }
+	if (isUsageSnapshotStale(input.usage ?? null, input.compaction ?? null)) { return "?"; }
 	return `${usedPercent}%`;
 }

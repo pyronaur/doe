@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ReasoningEffort } from "../codex/client.js";
-import { readOptionalModelId } from "../codex/model-selection.js";
-import type { MarkdownDoc } from "../templates/loader.js";
-import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
-import { getPlanFilePath, getSessionWorkspacePath, normalizePlanSlug } from "./slug.js";
+import type { ReasoningEffort } from "../codex/client.ts";
+import { readOptionalModelId } from "../codex/model-selection.ts";
+import type { MarkdownDoc } from "../templates/loader.ts";
+import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.ts";
+import { getPlanFilePath, getSessionWorkspacePath, normalizePlanSlug } from "./slug.ts";
 
 export interface SharedKnowledgebaseContext {
 	sessionSlug: string;
@@ -36,15 +36,21 @@ function findTemplateDoc(templatesDir: string, templateName: string): MarkdownDo
 	return doc;
 }
 
-export function getSharedKnowledgebaseContext(repoRoot: string, sessionSlug: string): SharedKnowledgebaseContext {
+export function getSharedKnowledgebaseContext(
+	repoRoot: string,
+	sessionSlug: string,
+): SharedKnowledgebaseContext {
 	return {
 		sessionSlug,
 		sharedKnowledgebasePath: getSessionWorkspacePath(repoRoot, sessionSlug),
 	};
 }
 
-export function injectSharedKnowledgebaseContext(prompt: string, context: SharedKnowledgebaseContext | null): string {
-	if (!context) return prompt;
+export function injectSharedKnowledgebaseContext(
+	prompt: string,
+	context: SharedKnowledgebaseContext | null,
+): string {
+	if (!context) { return prompt; }
 	const prefix = [
 		"Shared session context:",
 		`- Session slug: ${context.sessionSlug}`,
@@ -81,9 +87,9 @@ export function ensurePlanFile(path: string): EnsuredPlanFile {
 }
 
 export function deletePlanFileIfEmpty(path: string): void {
-	if (!existsSync(path)) return;
+	if (!existsSync(path)) { return; }
 	const text = readFileSync(path, "utf-8");
-	if (text.trim().length > 0) return;
+	if (text.trim().length > 0) { return; }
 	unlinkSync(path);
 }
 
@@ -114,10 +120,14 @@ export function renderPlanPrompt(input: {
 
 export function readPlanTemplateDefaults(templatesDir: string): PlanTemplateDefaults {
 	const doc = findTemplateDoc(templatesDir, "plan");
-	const model = readOptionalModelId(doc.attributes.default_model, `template "${doc.name}" default_model`) ?? "gpt-5.4";
+	const model =
+		readOptionalModelId(doc.attributes.default_model, `template "${doc.name}" default_model`)
+			?? "gpt-5.4";
 	const effort = doc.attributes.default_effort;
 	if (effort !== "low" && effort !== "medium" && effort !== "high" && effort !== "xhigh") {
-		throw new Error(`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`);
+		throw new Error(
+			`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`,
+		);
 	}
 	return {
 		model,

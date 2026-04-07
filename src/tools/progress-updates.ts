@@ -1,6 +1,6 @@
-import type { DoeRegistry } from "../roster/registry.js";
-import type { AgentRecord } from "../roster/types.js";
-import { formatAgentProgressSummary } from "../ui/agent-progress.js";
+import type { DoeRegistry } from "../roster/registry.ts";
+import type { AgentRecord } from "../roster/types.ts";
+import { formatAgentProgressSummary } from "../ui/agent-progress.ts";
 
 function collectAgents(registry: DoeRegistry, agentIds: string[]): AgentRecord[] {
 	return agentIds
@@ -23,7 +23,9 @@ export function buildToolProgressUpdate(registry: DoeRegistry, agentIds: string[
 	return {
 		agents,
 		activeAgents: working,
-		progressSummary: summaryAgents.length > 0 ? formatAgentProgressSummary(summaryAgents) : "Launching ICs...",
+		progressSummary: summaryAgents.length > 0
+			? formatAgentProgressSummary(summaryAgents)
+			: "Launching ICs...",
 	};
 }
 
@@ -40,18 +42,18 @@ export function startToolProgressUpdates(input: {
 	onProgressSummary?: ((summary: string) => void) | undefined;
 	onStop?: (() => void) | undefined;
 }): () => void {
-	if (!input.onUpdate && !input.onProgressSummary) return () => {};
+	if (!input.onUpdate && !input.onProgressSummary) { return () => {}; }
 	let lastSummary: string | null = null;
 
 	const emitProgress = () => {
 		const snapshot = buildToolProgressUpdate(input.registry, input.agentIds);
-		if (snapshot.progressSummary === lastSummary) return;
+		if (snapshot.progressSummary === lastSummary) { return; }
 		lastSummary = snapshot.progressSummary;
 		input.onProgressSummary?.(snapshot.progressSummary);
 		input.onUpdate?.({
 			content: [{ type: "text", text: snapshot.progressSummary }],
 			details: {
-				...(input.baseDetails ?? {}),
+				...input.baseDetails,
 				agentIds: [...input.agentIds],
 				agents: snapshot.agents,
 				activeAgents: snapshot.activeAgents,

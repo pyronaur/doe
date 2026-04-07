@@ -15,13 +15,24 @@ interface PlannotatorReviewOutput {
 	};
 }
 
+function isPlannotatorOutput(value: unknown): value is PlannotatorReviewOutput {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	return true;
+}
+
 export function parsePlannotatorReviewResult(stdout: string): DoePlanReviewResult {
-	let output: PlannotatorReviewOutput;
+	let parsed: unknown;
 	try {
-		output = JSON.parse(stdout.trim()) as PlannotatorReviewOutput;
+		parsed = JSON.parse(stdout.trim());
 	} catch {
 		throw new Error("Plannotator review output was not valid JSON.");
 	}
+	if (!isPlannotatorOutput(parsed)) {
+		throw new Error("Plannotator review output did not include a decision.");
+	}
+	const output = parsed;
 
 	const behavior = output.hookSpecificOutput?.decision?.behavior;
 	if (behavior === "allow") {
@@ -75,7 +86,7 @@ export async function runPlanReviewCli(input: {
 		};
 
 		const finish = (handler: () => void) => {
-			if (settled) return;
+			if (settled) { return; }
 			settled = true;
 			cleanup();
 			handler();
@@ -83,7 +94,9 @@ export async function runPlanReviewCli(input: {
 
 		const handleAbort = () => {
 			child.kill("SIGTERM");
-			finish(() => reject(new Error("Plannotator review was cancelled before a decision was captured.")));
+			finish(() =>
+				reject(new Error("Plannotator review was cancelled before a decision was captured."))
+			);
 		};
 
 		input.signal?.addEventListener("abort", handleAbort, { once: true });
@@ -108,14 +121,17 @@ export async function runPlanReviewCli(input: {
 					} catch (error) {
 						reject(
 							new Error(
-								`Plannotator review returned an invalid decision: ${error instanceof Error ? error.message : String(error)}`,
+								`Plannotator review returned an invalid decision: ${
+									error instanceof Error ? error.message : String(error)
+								}`,
 							),
 						);
 						return;
 					}
 					return;
 				}
-				const reason = stderr.trim() || stdout.trim() || `exit code ${code ?? "null"}, signal ${signal ?? "null"}`;
+				const reason = stderr.trim() || stdout.trim()
+					|| `exit code ${code ?? "null"}, signal ${signal ?? "null"}`;
 				reject(new Error(`Plannotator CLI review failed: ${reason}`));
 			});
 		});

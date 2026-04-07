@@ -1,8 +1,8 @@
+import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 
 export const READ_TOOL_NAME = "read";
 export const NON_IMAGE_READ_BLOCK_REASON = "CTO approval required for non-image reads.";
@@ -53,8 +53,16 @@ interface EvaluateReadGateOptions extends ClassifyReadPathOptions {
 
 const APPROVAL_OPTIONS = ["Yes", "No", "No, with reason..."] as const;
 
-function buildNonImageReadApprovalTitle(input: ReadGateInput, classification: ReadPathClassification): string {
-	return ["CTO Approval Required", buildNonImageReadApprovalMessage(input, classification)].join("\n\n");
+function buildNonImageReadApprovalTitle(
+	input: ReadGateInput,
+	classification: ReadPathClassification,
+): string {
+	return [
+		"CTO Approval Required",
+		buildNonImageReadApprovalMessage(input, classification),
+	].join(
+		"\n\n",
+	);
 }
 
 function normalizeDenialReason(reason: string | undefined): string {
@@ -101,80 +109,133 @@ function fileExists(filePath: string): boolean {
 	return existsSync(filePath);
 }
 
-export function expandReadPath(filePath: string, options: ResolvePathOptions = {}): string {
-	const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
-	const home = options.homeDir ?? homedir();
-	if (normalized === "~") return home;
-	if (normalized.startsWith("~/")) return `${home}${normalized.slice(1)}`;
-	return normalized;
-}
-
-export function resolveReadPathForGate(filePath: string, cwd: string, options: ResolvePathOptions = {}): string {
-	const expanded = expandReadPath(filePath, options);
-	const resolved = isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
-	if (fileExists(resolved)) return resolved;
-
-	const amPmVariant = tryMacOsScreenshotPath(resolved);
-	if (amPmVariant !== resolved && fileExists(amPmVariant)) return amPmVariant;
-
-	const nfdVariant = tryNfdVariant(resolved);
-	if (nfdVariant !== resolved && fileExists(nfdVariant)) return nfdVariant;
-
-	const curlyVariant = tryCurlyQuoteVariant(resolved);
-	if (curlyVariant !== resolved && fileExists(curlyVariant)) return curlyVariant;
-
-	const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
-	if (nfdCurlyVariant !== resolved && fileExists(nfdCurlyVariant)) return nfdCurlyVariant;
-
-	return resolved;
-}
-
 function detectSupportedImageMimeType(header: Buffer): string | null {
 	if (header.length >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) {
 		return "image/jpeg";
 	}
 
 	if (
-		header.length >= 8 &&
-		header[0] === 0x89 &&
-		header[1] === 0x50 &&
-		header[2] === 0x4e &&
-		header[3] === 0x47 &&
-		header[4] === 0x0d &&
-		header[5] === 0x0a &&
-		header[6] === 0x1a &&
-		header[7] === 0x0a
+		header.length >= 8
+		&& header[0] === 0x89
+		&& header[1] === 0x50
+		&& header[2] === 0x4e
+		&& header[3] === 0x47
+		&& header[4] === 0x0d
+		&& header[5] === 0x0a
+		&& header[6] === 0x1a
+		&& header[7] === 0x0a
 	) {
 		return "image/png";
 	}
 
 	if (
-		header.length >= 6 &&
-		header[0] === 0x47 &&
-		header[1] === 0x49 &&
-		header[2] === 0x46 &&
-		header[3] === 0x38 &&
-		(header[4] === 0x37 || header[4] === 0x39) &&
-		header[5] === 0x61
+		header.length >= 6
+		&& header[0] === 0x47
+		&& header[1] === 0x49
+		&& header[2] === 0x46
+		&& header[3] === 0x38
+		&& (header[4] === 0x37 || header[4] === 0x39)
+		&& header[5] === 0x61
 	) {
 		return "image/gif";
 	}
 
 	if (
-		header.length >= 12 &&
-		header[0] === 0x52 &&
-		header[1] === 0x49 &&
-		header[2] === 0x46 &&
-		header[3] === 0x46 &&
-		header[8] === 0x57 &&
-		header[9] === 0x45 &&
-		header[10] === 0x42 &&
-		header[11] === 0x50
+		header.length >= 12
+		&& header[0] === 0x52
+		&& header[1] === 0x49
+		&& header[2] === 0x46
+		&& header[3] === 0x46
+		&& header[8] === 0x57
+		&& header[9] === 0x45
+		&& header[10] === 0x42
+		&& header[11] === 0x50
 	) {
 		return "image/webp";
 	}
 
 	return null;
+}
+
+export async function evaluateReadGate(options: EvaluateReadGateOptions): Promise<ReadGateResult> {
+	const classification = await classifyReadPath(options.cwd, options.input.path, options);
+	if (classification.kind !== "non-image") {
+		return null;
+	}
+	if (!options.hasUI || !options.select) {
+		return { block: true, reason: NON_IMAGE_READ_NO_UI_REASON };
+	}
+
+	try {
+		const choice = await options.select(
+			buildNonImageReadApprovalTitle(options.input, classification),
+			[...APPROVAL_OPTIONS],
+		);
+		if (choice === "Yes") {
+			return null;
+		}
+		if (choice !== "No, with reason...") {
+			return { block: true, reason: NON_IMAGE_READ_BLOCK_REASON };
+		}
+		if (!options.promptInput) {
+			return { block: true, reason: NON_IMAGE_READ_NO_UI_REASON };
+		}
+		const reason = normalizeDenialReason(
+			await options.promptInput("Reason for denying this read", "Optional reason"),
+		);
+		return {
+			toolResult: buildDeniedReadToolResult(reason),
+			isError: false,
+		};
+	} catch {
+		return { block: true, reason: NON_IMAGE_READ_NO_UI_REASON };
+	}
+}
+
+export function expandReadPath(filePath: string, options: ResolvePathOptions = {}): string {
+	const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+	const home = options.homeDir ?? homedir();
+	if (normalized === "~") {
+		return home;
+	}
+	if (normalized.startsWith("~/")) {
+		return `${home}${normalized.slice(1)}`;
+	}
+	return normalized;
+}
+
+export function resolveReadPathForGate(
+	filePath: string,
+	cwd: string,
+	options: ResolvePathOptions = {},
+): string {
+	const expanded = expandReadPath(filePath, options);
+	const resolved = isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
+	if (fileExists(resolved)) {
+		return resolved;
+	}
+
+	const amPmVariant = tryMacOsScreenshotPath(resolved);
+	if (amPmVariant !== resolved && fileExists(amPmVariant)) {
+		return amPmVariant;
+	}
+
+	const nfdVariant = tryNfdVariant(resolved);
+	if (nfdVariant !== resolved && fileExists(nfdVariant)) {
+		return nfdVariant;
+	}
+
+	const curlyVariant = tryCurlyQuoteVariant(resolved);
+	if (curlyVariant !== resolved && fileExists(curlyVariant)) {
+		return curlyVariant;
+	}
+
+	const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
+	if (nfdCurlyVariant !== resolved && fileExists(nfdCurlyVariant)) {
+		return nfdCurlyVariant;
+	}
+
+	return resolved;
 }
 
 export async function classifyReadPath(
@@ -204,7 +265,9 @@ export async function classifyReadPath(
 }
 
 export function ensureReadToolActive(toolNames: readonly string[]): string[] {
-	if (toolNames.includes(READ_TOOL_NAME)) return [...toolNames];
+	if (toolNames.includes(READ_TOOL_NAME)) {
+		return [...toolNames];
+	}
 	return [...toolNames, READ_TOOL_NAME];
 }
 
@@ -226,32 +289,4 @@ export function buildNonImageReadApprovalMessage(
 		lines.push(`Limit: ${input.limit}`);
 	}
 	return lines.join("\n");
-}
-
-export async function evaluateReadGate(options: EvaluateReadGateOptions): Promise<ReadGateResult> {
-	const classification = await classifyReadPath(options.cwd, options.input.path, options);
-	if (classification.kind !== "non-image") return null;
-	if (!options.hasUI || !options.select) {
-		return { block: true, reason: NON_IMAGE_READ_NO_UI_REASON };
-	}
-
-	try {
-		const choice = await options.select(buildNonImageReadApprovalTitle(options.input, classification), [...APPROVAL_OPTIONS]);
-		if (choice === "Yes") return null;
-		if (choice !== "No, with reason...") {
-			return { block: true, reason: NON_IMAGE_READ_BLOCK_REASON };
-		}
-		if (!options.promptInput) {
-			return { block: true, reason: NON_IMAGE_READ_NO_UI_REASON };
-		}
-		const reason = normalizeDenialReason(
-			await options.promptInput("Reason for denying this read", "Optional reason"),
-		);
-		return {
-			toolResult: buildDeniedReadToolResult(reason),
-			isError: false,
-		};
-	} catch {
-		return { block: true, reason: NON_IMAGE_READ_NO_UI_REASON };
-	}
 }

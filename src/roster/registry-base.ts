@@ -60,7 +60,9 @@ export class DoeRegistryBase extends EventEmitter {
 		return batch;
 	}
 
-	assignSeat(input: { agentId: string; ic?: string | null; role?: ICRole | null; model?: string | null }): RosterSeatRecord {
+	assignSeat(
+		input: { agentId: string; ic?: string | null; role?: ICRole | null; model?: string | null },
+	): RosterSeatRecord {
 		const requestedIc = input.ic?.trim() || null;
 		const requestedRole = input.role ?? null;
 		if (!requestedIc && !requestedRole) {
@@ -112,7 +114,7 @@ export class DoeRegistryBase extends EventEmitter {
 
 	getAgentByThreadId(threadId: string): AgentRecord | undefined {
 		for (const agent of this.agents.values()) {
-			if (agent.threadId === threadId) {return cloneAgent(agent);}
+			if (agent.threadId === threadId) { return cloneAgent(agent); }
 		}
 		return undefined;
 	}
@@ -124,25 +126,25 @@ export class DoeRegistryBase extends EventEmitter {
 
 	findActiveSeatAgent(name: string): AgentRecord | undefined {
 		const seat = this.seats.get(normalizeSeatName(name));
-		if (!seat?.activeAgentId) {return undefined;}
+		if (!seat?.activeAgentId) { return undefined; }
 		return this.getAgent(seat.activeAgentId);
 	}
 
 	findLastFinishedSeatAgent(name: string): AgentRecord | undefined {
 		const seat = this.seats.get(normalizeSeatName(name));
-		if (!seat?.lastFinishedAgentId) {return undefined;}
+		if (!seat?.lastFinishedAgentId) { return undefined; }
 		return this.getAgent(seat.lastFinishedAgentId);
 	}
 
 	findAgent(identifier: string): AgentRecord | undefined {
 		const seatMatch = this.findActiveSeatAgent(identifier)
 			?? this.findLastFinishedSeatAgent(identifier);
-		if (seatMatch) {return seatMatch;}
+		if (seatMatch) { return seatMatch; }
 		const exact = this.getAgent(identifier) ?? this.getAgentByThreadId(identifier);
-		if (exact) {return exact;}
+		if (exact) { return exact; }
 		const normalized = identifier.trim().toLowerCase();
 		for (const agent of this.agents.values()) {
-			if (agent.name.trim().toLowerCase() === normalized) {return cloneAgent(agent);}
+			if (agent.name.trim().toLowerCase() === normalized) { return cloneAgent(agent); }
 		}
 		return undefined;
 	}
@@ -158,12 +160,12 @@ export class DoeRegistryBase extends EventEmitter {
 		const { includeCompleted = true, limit, state } = options;
 		let agents = [...this.agents.values()];
 		agents = agents.filter((agent) => {
-			if (state && agent.state !== state) {return false;}
-			if (!includeCompleted && TERMINAL_STATES.has(agent.state)) {return false;}
+			if (state && agent.state !== state) { return false; }
+			if (!includeCompleted && TERMINAL_STATES.has(agent.state)) { return false; }
 			return true;
 		});
 		agents.sort((a, b) => b.startedAt - a.startedAt);
-		if (typeof limit === "number") {agents = agents.slice(0, limit);}
+		if (typeof limit === "number") { agents = agents.slice(0, limit); }
 		return agents.map(cloneAgent);
 	}
 
@@ -175,7 +177,7 @@ export class DoeRegistryBase extends EventEmitter {
 
 	listBatches(limit?: number): BatchRecord[] {
 		let batches = [...this.batches.values()].sort((a, b) => b.startedAt - a.startedAt);
-		if (typeof limit === "number") {batches = batches.slice(0, limit);}
+		if (typeof limit === "number") { batches = batches.slice(0, limit); }
 		return batches.map((batch) => ({ ...batch, agentIds: [...batch.agentIds] }));
 	}
 
@@ -204,7 +206,7 @@ export class DoeRegistryBase extends EventEmitter {
 			}
 			if (includeHistory && seat.lastFinishedAgentId) {
 				const history = this.getAgent(seat.lastFinishedAgentId);
-				if (history) {entries.push({ seat, agent: history, source: "history" });}
+				if (history) { entries.push({ seat, agent: history, source: "history" }); }
 			}
 		}
 		return typeof limit === "number" ? entries.slice(0, limit) : entries;
@@ -251,23 +253,15 @@ export class DoeRegistryBase extends EventEmitter {
 			throw new Error(`${seat.name} is still working. Wait, resume, or cancel before finalizing.`);
 		}
 
-		const finalized = {
-			...cloneAgent(agent),
-			state: "finalized" as const,
-			activityLabel: "completed" as const,
-			activeTurnId: null,
+		const finalized = this.buildFinalizedAgent(agent, {
 			completedAt: agent.completedAt ?? Date.now(),
-			finishNote: input.note ?? agent.finishNote ?? null,
-			reuseSummary: input.reuseSummary ?? agent.reuseSummary ?? null,
-			latestSnippet: input.note ? tailSnippet(input.note) : agent.latestSnippet,
-		};
-			this.releaseSeat(finalized, {
-				note: finalized.finishNote ?? null,
-				reuseSummary: finalized.reuseSummary ?? null,
-			});
-			const saved = this.upsertAgent(finalized);
-			return { seat: this.requireSeat(seat.name), agent: saved };
-		}
+			note: input.note,
+			reuseSummary: input.reuseSummary,
+		});
+		this.releaseFinalizedAgent(finalized);
+		const saved = this.upsertAgent(finalized);
+		return { seat: this.requireSeat(seat.name), agent: saved };
+	}
 
 	cancelAgent(
 		agentId: string,
@@ -281,22 +275,43 @@ export class DoeRegistryBase extends EventEmitter {
 		if (!agent) {
 			throw new Error(`Unknown agent "${agentId}".`);
 		}
-		const finalized = {
-			...cloneAgent(agent),
-			state: "finalized" as const,
-			activityLabel: "completed" as const,
-			activeTurnId: null,
+		const finalized = this.buildFinalizedAgent(agent, {
 			completedAt: Date.now(),
+			interruptedTurnId: input.interruptedTurnId,
+			note: input.note,
+			reuseSummary: input.reuseSummary,
+		});
+		this.releaseFinalizedAgent(finalized);
+		return this.upsertAgent(finalized);
+	}
+
+	protected releaseFinalizedAgent(finalized: AgentRecord) {
+		this.releaseSeat(finalized, {
+			note: finalized.finishNote ?? null,
+			reuseSummary: finalized.reuseSummary ?? null,
+		});
+	}
+
+	protected buildFinalizedAgent(
+		agent: AgentRecord,
+		input: {
+			completedAt: number;
+			interruptedTurnId?: string | null;
+			note?: string | null;
+			reuseSummary?: string | null;
+		},
+	): AgentRecord {
+		return {
+			...cloneAgent(agent),
+			state: "finalized",
+			activityLabel: "completed",
+			activeTurnId: null,
+			completedAt: input.completedAt,
 			interruptedTurnId: input.interruptedTurnId ?? agent.interruptedTurnId ?? null,
 			finishNote: input.note ?? agent.finishNote ?? null,
 			reuseSummary: input.reuseSummary ?? agent.reuseSummary ?? null,
 			latestSnippet: input.note ? tailSnippet(input.note) : agent.latestSnippet,
 		};
-		this.releaseSeat(finalized, {
-			note: finalized.finishNote ?? null,
-			reuseSummary: finalized.reuseSummary ?? null,
-		});
-		return this.upsertAgent(finalized);
 	}
 
 	protected resetRoster() {
@@ -312,7 +327,7 @@ export class DoeRegistryBase extends EventEmitter {
 
 	protected requireSeat(name: string): RosterSeatRecord {
 		const seat = this.seats.get(normalizeSeatName(name));
-		if (!seat) {throw new Error(`Unknown IC seat "${name}".`);}
+		if (!seat) { throw new Error(`Unknown IC seat "${name}".`); }
 		return cloneSeat(seat);
 	}
 
@@ -348,8 +363,10 @@ export class DoeRegistryBase extends EventEmitter {
 			throw new Error("Seat assignment requires an explicit role.");
 		}
 		const named = this.listRosterSeats().find((seat) => seat.role === role && !seat.activeAgentId);
-		if (named) {return named;}
-		const contractor = this.listRosterSeats().find((seat) => seat.role === "contractor" && !seat.activeAgentId);
+		if (named) { return named; }
+		const contractor = this.listRosterSeats().find((seat) =>
+			seat.role === "contractor" && !seat.activeAgentId
+		);
 		if (contractor) {
 			if (!model) {
 				throw new Error("Contractor assignments require an explicit model.");
@@ -375,10 +392,10 @@ export class DoeRegistryBase extends EventEmitter {
 		agent: AgentRecord,
 		input: { note?: string | null; reuseSummary?: string | null } = {},
 	) {
-		if (!agent.seatName) {return;}
+		if (!agent.seatName) { return; }
 		const key = normalizeSeatName(agent.seatName);
 		const seat = this.seats.get(key);
-		if (!seat) {return;}
+		if (!seat) { return; }
 		const nextSeat: RosterSeatRecord = {
 			...seat,
 			activeAgentId: seat.activeAgentId === agent.id ? null : seat.activeAgentId ?? null,
@@ -400,10 +417,10 @@ export class DoeRegistryBase extends EventEmitter {
 				});
 			}
 		}
-		if (!next.seatName) {return;}
+		if (!next.seatName) { return; }
 		const key = normalizeSeatName(next.seatName);
 		const seat = this.seats.get(key);
-		if (!seat) {return;}
+		if (!seat) { return; }
 		const nextSeat = { ...seat };
 		next.name = seat.name;
 		next.seatRole = seat.role;
@@ -412,7 +429,7 @@ export class DoeRegistryBase extends EventEmitter {
 			this.seats.set(key, nextSeat);
 			return;
 		}
-		if (nextSeat.activeAgentId === next.id) {nextSeat.activeAgentId = null;}
+		if (nextSeat.activeAgentId === next.id) { nextSeat.activeAgentId = null; }
 		nextSeat.lastFinishedAgentId = next.id;
 		nextSeat.lastThreadId = next.threadId ?? nextSeat.lastThreadId ?? null;
 		nextSeat.lastFinishNote = next.finishNote ?? nextSeat.lastFinishNote ?? null;
@@ -422,7 +439,7 @@ export class DoeRegistryBase extends EventEmitter {
 
 	protected updateAgent(agentId: string, updater: (agent: AgentRecord) => AgentRecord) {
 		const current = this.agents.get(agentId);
-		if (!current) {return;}
+		if (!current) { return; }
 		this.upsertAgent(updater(cloneAgent(current)));
 	}
 
@@ -438,26 +455,26 @@ export class DoeRegistryBase extends EventEmitter {
 	protected resolveAgent(agent: AgentRecord) {
 		const waiters = this.agentWaiters.get(agent.id) ?? [];
 		this.agentWaiters.delete(agent.id);
-		for (const waiter of waiters) {waiter(cloneAgent(agent));}
+		for (const waiter of waiters) { waiter(cloneAgent(agent)); }
 		this.emit("event",
 			{ type: "agent-terminal", agent: cloneAgent(agent) } satisfies RegistryEvent);
 	}
 
 	protected checkBatchCompletion(batchId?: string) {
-		if (!batchId) {return;}
+		if (!batchId) { return; }
 		const batch = this.batches.get(batchId);
-		if (!batch) {return;}
-		if (batch.completedAt) {return;}
+		if (!batch) { return; }
+		if (batch.completedAt) { return; }
 		const agents = batch.agentIds
 			.map((id) => this.agents.get(id))
 			.filter((agent): agent is AgentRecord => agent !== undefined);
-		if (agents.length === 0) {return;}
-		if (!agents.every((agent) => TERMINAL_STATES.has(agent.state))) {return;}
+		if (agents.length === 0) { return; }
+		if (!agents.every((agent) => TERMINAL_STATES.has(agent.state))) { return; }
 		const nextBatch = { ...batch, completedAt: Date.now() };
 		this.batches.set(batch.id, nextBatch);
 		const waiters = this.batchWaiters.get(batch.id) ?? [];
 		this.batchWaiters.delete(batch.id);
-		for (const waiter of waiters) {waiter(agents.map(cloneAgent));}
+		for (const waiter of waiters) { waiter(agents.map(cloneAgent)); }
 		this.emit("event", {
 			type: "batch-completed",
 			batch: { ...nextBatch, agentIds: [...nextBatch.agentIds] },

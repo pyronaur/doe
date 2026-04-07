@@ -1,23 +1,13 @@
-import { Type } from "@sinclair/typebox";
-import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
-import type { DoeRegistry } from "../roster/registry.js";
-import { cancelAgentRun } from "./cancel-agent-run.js";
-
-function resolveCancelTarget(registry: DoeRegistry, params: any) {
-	if (params.ic) {
-		const active = registry.findActiveSeatAgent(params.ic);
-		if (active) return active;
-		if (registry.findSeat(params.ic)) {
-			throw new Error(`${params.ic} has no active assignment to cancel.`);
-		}
-	}
-	if (params.agentId) return registry.findAgent(params.agentId);
-	if (params.threadId) return registry.findAgent(params.threadId);
-	return undefined;
-}
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+import type { CodexAppServerClient } from "../codex/app-server-client.ts";
+import { formatUsageCompact } from "../context-usage.ts";
+import type { DoeRegistry } from "../roster/registry.ts";
+import { cancelAgentRun } from "./cancel-agent-run.ts";
+import { formatContextStatusLines } from "./context-status.ts";
+import { resolveSeatTarget } from "./resume-target.ts";
+import { AgentLookupFields } from "./shared-schemas.ts";
 
 export function registerCancelTool(
 	pi: ExtensionAPI,
@@ -34,19 +24,24 @@ export function registerCancelTool(
 			"Use codex_resume with reuseFinished=true only when DOE explicitly wants to reopen the canceled thread context.",
 		],
 		parameters: Type.Object({
-			ic: Type.Optional(Type.String()),
-			agentId: Type.Optional(Type.String()),
-			threadId: Type.Optional(Type.String()),
+			...AgentLookupFields,
 		}),
 		renderCall(args, theme) {
-			return new Text(theme.fg("warning", `codex_cancel ${(args as any).ic ?? (args as any).agentId ?? (args as any).threadId ?? "thread"}`), 0, 0);
+			return new Text(
+				theme.fg("warning", `codex_cancel ${args.ic ?? args.agentId ?? args.threadId ?? "thread"}`),
+				0,
+				0,
+			);
 		},
 		renderResult(result, _options, theme) {
 			return new Text(theme.fg("warning", result.content?.[0]?.text ?? "Cancelled"), 0, 0);
 		},
 		async execute(_toolCallId, params) {
-			const agent = resolveCancelTarget(deps.registry, params);
-			if (!agent?.threadId) throw new Error("Unknown IC/agent/thread.");
+			const agent = resolveSeatTarget(deps.registry, params, {
+				includeFinished: false,
+				missingSeatMessage: (ic) => `${ic} has no active assignment to cancel.`,
+			});
+			if (!agent?.threadId) { throw new Error("Unknown IC/agent/thread."); }
 			const updated = await cancelAgentRun({
 				agent,
 				client: deps.client,
@@ -54,7 +49,16 @@ export function registerCancelTool(
 				note: "Cancelled by Director of Engineering.",
 			});
 			return {
-				content: [{ type: "text", text: `Cancelled ${agent.name}.\nstate: finalized\nseat: released\ncontext: ${formatUsageCompact(updated?.usage)}${formatCompactionSignal(updated?.compaction) ? `\ncontext_status: ${formatCompactionSignal(updated?.compaction)}` : ""}` }],
+				content: [{
+					type: "text",
+					text: [
+						`Cancelled ${agent.name}.`,
+						"state: finalized",
+						"seat: released",
+						`context: ${formatUsageCompact(updated?.usage)}`,
+						...formatContextStatusLines(updated?.compaction),
+					].join("\n"),
+				}],
 				details: { agent: updated },
 			};
 		},

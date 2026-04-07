@@ -1,5 +1,5 @@
-import { IC_CONFIG, SEAT_ROLES } from "./config.js";
-import type { AgentCompactionState } from "../context-usage.js";
+import type { AgentCompactionState } from "../context-usage.ts";
+import { IC_CONFIG, SEAT_ROLES } from "./config.ts";
 import type {
 	AgentLifecycleState,
 	AgentMessageRecord,
@@ -7,23 +7,45 @@ import type {
 	ICConfig,
 	RosterSeatRecord,
 	SeatRole,
-} from "./types.js";
+} from "./types.ts";
 
-export const TERMINAL_STATES = new Set<AgentLifecycleState>(["completed", "error", "awaiting_input", "finalized"]);
-const ATTACHED_STATES = new Set<AgentLifecycleState>(["working", "awaiting_input", "completed"]);
-const RECOVERABLE_STATES = new Set<AgentLifecycleState>(["working", "awaiting_input"]);
+function sameLogicalMessage(a: AgentMessageRecord, b: AgentMessageRecord): boolean {
+	if (a.itemId && b.itemId) {
+		return a.itemId === b.itemId;
+	}
+	if (a.role !== b.role || a.turnId !== b.turnId) {
+		return false;
+	}
+	if (a.role === "user") {
+		return true;
+	}
+	if (!a.text || !b.text) {
+		return false;
+	}
+	return a.text === b.text || a.text.startsWith(b.text) || b.text.startsWith(a.text);
+}
+
 const CONTRACTOR_NAME = /^contractor-(\d+)$/i;
+
+const IC_CONFIG_BY_NAME = new Map(IC_CONFIG.map((ic) => [normalizeSeatName(ic.name), ic]));
+const IC_DISPLAY_ORDER = new Map(IC_CONFIG.map((ic, index) => [normalizeSeatName(ic.name), index]));
 
 export function normalizeErrorText(text: string): string {
 	const trimmed = text.trim();
-	if (!trimmed) return text;
+	if (!trimmed) {
+		return text;
+	}
+
 	try {
-		const parsed = JSON.parse(trimmed);
-		const message = parsed?.error?.message;
+		const parsed: { error?: { message?: unknown } } = JSON.parse(trimmed);
+		const message = parsed.error?.message;
 		if (typeof message === "string" && message.trim()) {
 			return message.trim();
 		}
-	} catch {}
+	} catch (error) {
+		void error;
+	}
+
 	return text;
 }
 
@@ -31,30 +53,55 @@ export function normalizeSeatName(name: string): string {
 	return name.trim().toLowerCase();
 }
 
-const IC_CONFIG_BY_NAME = new Map(IC_CONFIG.map((ic) => [normalizeSeatName(ic.name), ic]));
-const IC_DISPLAY_ORDER = new Map(IC_CONFIG.map((ic, index) => [normalizeSeatName(ic.name), index]));
-
 export function findICConfigByName(name: string): ICConfig | undefined {
 	return IC_CONFIG_BY_NAME.get(normalizeSeatName(name));
 }
 
 export function contractorNumber(name: string): number | null {
 	const match = name.match(CONTRACTOR_NAME);
-	if (!match) return null;
+	if (!match) {
+		return null;
+	}
 	const parsed = Number.parseInt(match[1] ?? "", 10);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-export function defaultSeatRecord(input: { name: string; role: SeatRole; model: string }): RosterSeatRecord {
+export function highestContractorNumber(
+	seats: Iterable<{ name: string }>,
+): number {
+	let highest = 0;
+	for (const seat of seats) {
+		const number = contractorNumber(seat.name) ?? 0;
+		if (number > highest) {
+			highest = number;
+		}
+	}
+	return highest;
+}
+
+export function normalizeSeatLinks(
+	input: Partial<RosterSeatRecord> | null | undefined,
+): Pick<
+	RosterSeatRecord,
+	"activeAgentId" | "lastFinishedAgentId" | "lastThreadId" | "lastFinishNote" | "lastReuseSummary"
+> {
+	return {
+		activeAgentId: input?.activeAgentId ?? null,
+		lastFinishedAgentId: input?.lastFinishedAgentId ?? null,
+		lastThreadId: input?.lastThreadId ?? null,
+		lastFinishNote: input?.lastFinishNote ?? null,
+		lastReuseSummary: input?.lastReuseSummary ?? null,
+	};
+}
+
+export function defaultSeatRecord(
+	input: { name: string; role: SeatRole; model: string },
+): RosterSeatRecord {
 	return {
 		name: input.name,
 		role: input.role,
 		model: input.model,
-		activeAgentId: null,
-		lastFinishedAgentId: null,
-		lastThreadId: null,
-		lastFinishNote: null,
-		lastReuseSummary: null,
+		...normalizeSeatLinks(null),
 	};
 }
 
@@ -62,17 +109,15 @@ export function cloneSeat(seat: RosterSeatRecord): RosterSeatRecord {
 	return {
 		...seat,
 		model: seat.model,
-		activeAgentId: seat.activeAgentId ?? null,
-		lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
-		lastThreadId: seat.lastThreadId ?? null,
-		lastFinishNote: seat.lastFinishNote ?? null,
-		lastReuseSummary: seat.lastReuseSummary ?? null,
+		...normalizeSeatLinks(seat),
 	};
 }
 
 export function seatSort(a: RosterSeatRecord, b: RosterSeatRecord): number {
 	const roleDiff = SEAT_ROLES.indexOf(a.role) - SEAT_ROLES.indexOf(b.role);
-	if (roleDiff !== 0) return roleDiff;
+	if (roleDiff !== 0) {
+		return roleDiff;
+	}
 	const displayOrderA = IC_DISPLAY_ORDER.get(normalizeSeatName(a.name));
 	const displayOrderB = IC_DISPLAY_ORDER.get(normalizeSeatName(b.name));
 	if (typeof displayOrderA === "number" && typeof displayOrderB === "number") {
@@ -89,9 +134,15 @@ export function seatSort(a: RosterSeatRecord, b: RosterSeatRecord): number {
 export function tailSnippet(text: string, maxChars = 1800, maxLines = 12): string {
 	const normalized = text.replace(/\r\n?/g, "\n").replace(/\t/g, "  ");
 	let lines = normalized.split("\n").map((line) => line.replace(/\s+$/g, ""));
-	while (lines.length > 0 && lines[0] === "") lines.shift();
-	while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-	if (lines.length === 0) return "";
+	while (lines.length > 0 && lines[0] === "") {
+		lines.shift();
+	}
+	while (lines.length > 0 && lines[lines.length - 1] === "") {
+		lines.pop();
+	}
+	if (lines.length === 0) {
+		return "";
+	}
 	let clippedByLines = false;
 	if (lines.length > maxLines) {
 		lines = lines.slice(lines.length - maxLines);
@@ -118,11 +169,13 @@ export function cloneAgent(agent: AgentRecord): AgentRecord {
 	return {
 		...agent,
 		messages: (agent.messages ?? []).map(cloneMessage),
-		usage: agent.usage ? {
-			...agent.usage,
-			total: { ...agent.usage.total },
-			last: { ...agent.usage.last },
-		} : null,
+		usage: agent.usage
+			? {
+				...agent.usage,
+				total: { ...agent.usage.total },
+				last: { ...agent.usage.last },
+			}
+			: null,
 		compaction: agent.compaction ? { ...agent.compaction } : null,
 		historyHydratedAt: agent.historyHydratedAt ?? null,
 		seatName: agent.seatName ?? null,
@@ -134,7 +187,9 @@ export function cloneAgent(agent: AgentRecord): AgentRecord {
 	};
 }
 
-export function createCompactionState(previous?: AgentCompactionState | null): AgentCompactionState {
+export function createCompactionState(
+	previous?: AgentCompactionState | null,
+): AgentCompactionState {
 	return {
 		inProgress: previous?.inProgress ?? false,
 		count: previous?.count ?? 0,
@@ -146,48 +201,38 @@ export function createCompactionState(previous?: AgentCompactionState | null): A
 	};
 }
 
-function sameLogicalMessage(a: AgentMessageRecord, b: AgentMessageRecord): boolean {
-	if (a.itemId && b.itemId) return a.itemId === b.itemId;
-	if (a.role !== b.role || a.turnId !== b.turnId) return false;
-	if (a.role === "user") return true;
-	if (!a.text || !b.text) return false;
-	return a.text === b.text || a.text.startsWith(b.text) || b.text.startsWith(a.text);
-}
-
-export function latestAgentSummary(messages: AgentMessageRecord[]): { latestSnippet: string; latestFinalOutput: string | null } | null {
-	const lastAgentMessage = [...messages].reverse().find((message) => message.role === "agent" && message.text.trim().length > 0);
-	if (!lastAgentMessage) return null;
+export function latestAgentSummary(
+	messages: AgentMessageRecord[],
+): { latestSnippet: string; latestFinalOutput: string | null } | null {
+	const lastAgentMessage = [...messages].reverse().find((message) =>
+		message.role === "agent" && message.text.trim().length > 0
+	);
+	if (!lastAgentMessage) {
+		return null;
+	}
 	return {
 		latestSnippet: tailSnippet(lastAgentMessage.text),
 		latestFinalOutput: lastAgentMessage.streaming ? null : lastAgentMessage.text,
 	};
 }
 
-export function isAttachedState(state: AgentLifecycleState): boolean {
-	return ATTACHED_STATES.has(state);
-}
-
-export function isRecoverableState(state: AgentLifecycleState): boolean {
-	return RECOVERABLE_STATES.has(state);
-}
-
-export function normalizeAgentRecord(agent: AgentRecord): AgentRecord {
-	const legacy = agent as AgentRecord & { seatBucket?: SeatRole | null };
+export function normalizeAgentRecord(
+	agent: AgentRecord & { seatBucket?: SeatRole | null },
+): AgentRecord {
 	return {
 		...cloneAgent(agent),
-		seatRole: agent.seatRole ?? legacy.seatBucket ?? null,
+		seatRole: agent.seatRole ?? agent.seatBucket ?? null,
 		returnMode: "wait",
-		activityLabel:
-			agent.activityLabel ??
-			(agent.state === "completed"
+		activityLabel: agent.activityLabel
+			?? (agent.state === "completed"
 				? "completed"
 				: agent.state === "error"
-					? "error"
-					: agent.state === "awaiting_input"
-						? "awaiting input"
-						: agent.state === "finalized"
-							? "completed"
-							: "thinking"),
+				? "error"
+				: agent.state === "awaiting_input"
+				? "awaiting input"
+				: agent.state === "finalized"
+				? "completed"
+				: "thinking"),
 		recovered: true,
 		compaction: agent.compaction ? createCompactionState(agent.compaction) : null,
 		runStartedAt: agent.runStartedAt ?? agent.startedAt,
@@ -195,30 +240,46 @@ export function normalizeAgentRecord(agent: AgentRecord): AgentRecord {
 	};
 }
 
-export function shouldIgnoreInterruptedTerminalUpdate(agent: AgentRecord, turnId?: string | null): boolean {
-	if (!agent.interruptedTurnId) return false;
-	if (turnId && agent.interruptedTurnId !== turnId) return false;
+export function shouldIgnoreInterruptedTerminalUpdate(
+	agent: AgentRecord,
+	turnId?: string | null,
+): boolean {
+	if (!agent.interruptedTurnId) {
+		return false;
+	}
+	if (turnId && agent.interruptedTurnId !== turnId) {
+		return false;
+	}
 	return agent.state === "awaiting_input" || agent.state === "finalized";
 }
 
-export function mergeHydratedMessages(current: AgentMessageRecord[], hydrated: AgentMessageRecord[]): AgentMessageRecord[] {
+export function mergeHydratedMessages(
+	current: AgentMessageRecord[],
+	hydrated: AgentMessageRecord[],
+): AgentMessageRecord[] {
 	const live = current.map(cloneMessage);
 	const history = hydrated.map(cloneMessage);
-	if (live.length === 0) return history;
-	if (history.length === 0) return live;
+	if (live.length === 0) {
+		return history;
+	}
+	if (history.length === 0) {
+		return live;
+	}
 
 	let bestOffset = -1;
 	let bestOverlap = 0;
 	for (let offset = 0; offset < history.length; offset += 1) {
 		let overlap = 0;
 		while (
-			offset + overlap < history.length &&
-			overlap < live.length &&
-			sameLogicalMessage(history[offset + overlap]!, live[overlap]!)
+			offset + overlap < history.length
+			&& overlap < live.length
+			&& sameLogicalMessage(history[offset + overlap], live[overlap])
 		) {
 			overlap += 1;
 		}
-		if (overlap === 0) continue;
+		if (overlap === 0) {
+			continue;
+		}
 		if (overlap > bestOverlap) {
 			bestOverlap = overlap;
 			bestOffset = offset;
@@ -229,6 +290,21 @@ export function mergeHydratedMessages(current: AgentMessageRecord[], hydrated: A
 		return [...history.slice(0, bestOffset), ...live];
 	}
 
-	const mergedHistory = history.filter((message) => !live.some((entry) => sameLogicalMessage(entry, message)));
+	const mergedHistory = history.filter((message) =>
+		!live.some((entry) => sameLogicalMessage(entry, message))
+	);
 	return [...mergedHistory, ...live];
 }
+
+export const TERMINAL_STATES = new Set<AgentLifecycleState>([
+	"completed",
+	"error",
+	"awaiting_input",
+	"finalized",
+]);
+export const ATTACHED_STATES = new Set<AgentLifecycleState>([
+	"working",
+	"awaiting_input",
+	"completed",
+]);
+export const RECOVERABLE_STATES = new Set<AgentLifecycleState>(["working", "awaiting_input"]);

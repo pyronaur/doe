@@ -1,7 +1,12 @@
-import type { AgentActivity, ReasoningEffort } from "../codex/client.js";
-import type { AgentCompactionState, AgentUsageSnapshot } from "../context-usage.js";
+import type { AgentActivity, ReasoningEffort } from "../codex/client.ts";
+import type { AgentCompactionState, AgentUsageSnapshot } from "../context-usage.ts";
 
-export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_input" | "finalized";
+export type AgentLifecycleState =
+	| "working"
+	| "completed"
+	| "error"
+	| "awaiting_input"
+	| "finalized";
 export type NotificationMode = "wait_all" | "notify_each";
 export type ReturnMode = "wait";
 export type ICRole = "researcher" | "senior" | "mid" | "junior" | "intern";

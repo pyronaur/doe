@@ -1,6 +1,12 @@
-import type { ICRole, ICConfig, SeatRole } from "./types.js";
+import type { ICConfig, ICRole, SeatRole } from "./types.ts";
 
-export const IC_ROLES = ["researcher", "senior", "mid", "junior", "intern"] as const satisfies readonly ICRole[];
+export const IC_ROLES = [
+	"researcher",
+	"senior",
+	"mid",
+	"junior",
+	"intern",
+] as const satisfies readonly ICRole[];
 export const SEAT_ROLES = [...IC_ROLES, "contractor"] as const satisfies readonly SeatRole[];
 
 export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {

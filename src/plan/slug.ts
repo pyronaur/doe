@@ -54,7 +54,8 @@ export function getSessionWorkspacePath(repoRoot: string, sessionSlug: string): 
 }
 
 export function getPlanFilePath(repoRoot: string, sessionSlug: string, planSlug: string): string {
-	return resolve(getSessionWorkspacePath(repoRoot, sessionSlug), `plan-${normalizePlanSlug(planSlug)}.md`);
+	return resolve(getSessionWorkspacePath(repoRoot, sessionSlug),
+		`plan-${normalizePlanSlug(planSlug)}.md`);
 }
 
 export function inspectDirectory(path: string): DirectoryInspection {

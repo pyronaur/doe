@@ -1,6 +1,6 @@
-import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import type { DoeRegistry } from "../roster/registry.js";
-import type { AgentRecord } from "../roster/types.js";
+import type { CodexAppServerClient } from "../codex/app-server-client.ts";
+import type { DoeRegistry } from "../roster/registry.ts";
+import type { AgentRecord } from "../roster/types.ts";
 
 export async function cancelAgentRun(input: {
 	agent: AgentRecord;
@@ -14,13 +14,17 @@ export async function cancelAgentRun(input: {
 	if (current.threadId && interruptedTurnId) {
 		try {
 			await input.client.interruptTurn(current.threadId, interruptedTurnId);
-		} catch {}
+		} catch (error) {
+			console.error("[doe/tools] Failed to interrupt cancelled turn:", error);
+		}
 	}
 
 	if (current.threadId) {
 		try {
 			await input.client.unsubscribeThread(current.threadId);
-		} catch {}
+		} catch (error) {
+			console.error("[doe/tools] Failed to unsubscribe cancelled thread:", error);
+		}
 	}
 
 	return input.registry.cancelAgent(current.id, {

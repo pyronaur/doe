@@ -2,53 +2,27 @@ import { randomUUID } from "node:crypto";
 import type { ApprovalPolicy, ReasoningEffort, SandboxMode } from "../codex/client.ts";
 import { truncateForDisplay } from "../codex/client.ts";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.ts";
-import {
-	getSharedKnowledgebaseContext,
-	injectSharedKnowledgebaseContext,
-	type SharedKnowledgebaseContext,
-} from "../plan/flow.ts";
+import { getSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.ts";
 import type { ICRole, NotificationMode, SeatRole } from "../roster/types.ts";
-import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.ts";
+import { isRecord } from "../utils/guards.ts";
 import { cancelAgentRun } from "./cancel-agent-run.ts";
 import { startToolProgressUpdates } from "./progress-updates.ts";
 import { formatSpawnAgentResult, formatSpawnBatchResults } from "./spawn-result.ts";
-import { normalizeSpawnSeatIntent } from "./spawn-seat-intent.ts";
+import type {
+	SpawnBatchContext,
+	SpawnExecuteArgs,
+	SpawnExecutionInput,
+} from "./spawn-runtime-types.ts";
+import { inferName, normalizeSpawnSeatIntent } from "./spawn-seat-intent.ts";
 import type { SpawnExecuteContext, SpawnToolDeps } from "./spawn.ts";
-interface SpawnExecutionInput {
-	params: any;
-	signal: AbortSignal | undefined;
-	onUpdate: ((update: any) => void) | undefined;
-	deps: SpawnToolDeps;
-	resolveSandboxMode: (role: ICRole | null | undefined, sandbox?: SandboxMode | null) => SandboxMode;
-}
-interface SpawnBatchContext {
-	batchId: string | null;
-	batchName: string;
-	notificationMode: NotificationMode;
-	returnMode: "wait";
-	agentIds: string[];
-	promptsByAgentId: Record<string, string>;
-}
-interface SpawnPreparedTask {
-	agentId: string;
-	prompt: string;
-	cwd: string;
-	model: string;
-	effort: ReasoningEffort;
-	approvalPolicy: ApprovalPolicy;
-	networkAccess: boolean;
-	allowWrite: boolean;
-	sandbox: SandboxMode;
-}
-type SpawnExecuteArgs = [string, any, AbortSignal | undefined, ((update: any) => void) | undefined, SpawnExecuteContext | undefined];
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+import { buildTemplatePrompt } from "./template-prompt.ts";
+import { recordStartedTurn } from "./turn-start.ts";
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
 	return value === "low" || value === "medium" || value === "high" || value === "xhigh";
 }
 function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
-	return value === "never" || value === "on-request" || value === "on-failure" || value === "untrusted";
+	return value === "never" || value === "on-request" || value === "on-failure"
+		|| value === "untrusted";
 }
 function isSandboxMode(value: unknown): value is SandboxMode {
 	return value === "read-only" || value === "workspace-write" || value === "danger-full-access";
@@ -56,10 +30,6 @@ function isSandboxMode(value: unknown): value is SandboxMode {
 function isICRole(value: unknown): value is ICRole {
 	return value === "researcher" || value === "senior" || value === "mid"
 		|| value === "junior" || value === "intern";
-}
-function inferName(prompt: string): string {
-	const words = prompt.replace(/\s+/g, " ").trim().split(" ").filter(Boolean).slice(0, 2);
-	return words.join(" ") || "delegate";
 }
 function stripTaskControlKeys(task: unknown) {
 	if (!isRecord(task)) {
@@ -95,54 +65,22 @@ function buildPrompt(
 	task: any,
 	templatesDir: string,
 	sharedContext: SharedKnowledgebaseContext | null,
-): {
-	templateName: string | null;
-	prompt: string;
-	templateDefaultModel: string | null;
-	templateDefaultEffort: ReasoningEffort | null;
-} {
-	if (!task.template) {
-		return {
-			templateName: null,
-			prompt: injectSharedKnowledgebaseContext(task.prompt, sharedContext),
-			templateDefaultModel: null,
-			templateDefaultEffort: null,
-		};
-	}
-	const docs = loadMarkdownDocs(templatesDir);
-	const doc = docs.find((entry) => entry.name === task.template);
-	if (!doc) {
-		throw new Error(
-			`Unknown template "${task.template}". Available: ${docs.map((entry) => entry.name).join(", ") || "none"}`,
-		);
-	}
-	const defaultModel = readOptionalModelId(
-		doc.attributes.default_model,
-		`template "${doc.name}" default_model`,
-	);
-	if (!isReasoningEffort(doc.attributes.default_effort)) {
-		throw new Error(
-			`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`,
-		);
-	}
-	const variables = {
-		task: task.prompt,
-		name: task.name,
-		cwd: task.cwd,
-		...task.templateVariables,
-	};
-	const usesTaskPlaceholder = doc.body.includes("{{task}}");
-	let rendered = renderMarkdownTemplate(doc, variables).trim();
-	if (task.prompt && !usesTaskPlaceholder) {
-		rendered = `${rendered}\n\n# Task\n${task.prompt}`.trim();
-	}
-	rendered = injectSharedKnowledgebaseContext(rendered, sharedContext);
-	return {
-		templateName: doc.name,
-		prompt: rendered,
-		templateDefaultModel: defaultModel,
-		templateDefaultEffort: doc.attributes.default_effort,
-	};
+) {
+	return buildTemplatePrompt({
+		template: task.template,
+		prompt: task.prompt,
+		templatesDir,
+		templateVariables: task.templateVariables,
+		extraVariables: {
+			name: task.name,
+			cwd: task.cwd,
+		},
+		sharedContext,
+		unknownTemplateMessage: (templateName, docs) =>
+			`Unknown template "${templateName}". Available: ${
+				docs.map((entry) => entry.name).join(", ") || "none"
+			}`,
+	});
 }
 function normalizeSeatTasks(tasks: any[], registry: any): any[] {
 	return tasks.map((task) => {
@@ -156,7 +94,10 @@ function resolveApprovalPolicy(value: unknown): ApprovalPolicy {
 	}
 	return "never";
 }
-function resolveReasoningEffort(value: unknown, defaultEffort: ReasoningEffort | null): ReasoningEffort {
+function resolveReasoningEffort(
+	value: unknown,
+	defaultEffort: ReasoningEffort | null,
+): ReasoningEffort {
 	if (isReasoningEffort(value)) {
 		return value;
 	}
@@ -177,7 +118,10 @@ function resolveSandbox(value: unknown): SandboxMode | null {
 	}
 	return value;
 }
-function inferAllowWrite(task: { template?: string | null; allowWrite?: boolean }, templateName: string | null): boolean {
+function inferAllowWrite(
+	task: { template?: string | null; allowWrite?: boolean },
+	templateName: string | null,
+): boolean {
 	if (typeof task.allowWrite === "boolean") {
 		return task.allowWrite;
 	}
@@ -251,7 +195,10 @@ function readTaskContext(input: {
 	rawTask: any;
 	sessionSlug: string;
 	index: number;
-	resolveSandboxMode: (role: ICRole | null | undefined, sandbox?: SandboxMode | null) => SandboxMode;
+	resolveSandboxMode: (
+		role: ICRole | null | undefined,
+		sandbox?: SandboxMode | null,
+	) => SandboxMode;
 }) {
 	const agentId = input.context.agentIds[input.index];
 	const cwd = input.rawTask.cwd ?? process.cwd();
@@ -290,7 +237,11 @@ function readTaskContext(input: {
 		sandbox,
 	};
 }
-function seedTaskAgent(context: SpawnBatchContext, task: ReturnType<typeof readTaskContext>, deps: SpawnToolDeps) {
+function seedTaskAgent(
+	context: SpawnBatchContext,
+	task: ReturnType<typeof readTaskContext>,
+	deps: SpawnToolDeps,
+) {
 	const now = Date.now();
 	deps.registry.upsertAgent({
 		id: task.agentId,
@@ -325,49 +276,42 @@ function seedTaskAgent(context: SpawnBatchContext, task: ReturnType<typeof readT
 		historyHydratedAt: null,
 	});
 }
-function toPreparedTask(task: ReturnType<typeof readTaskContext>): SpawnPreparedTask {
+function buildThreadLaunchOptions(task: {
+	cwd: string;
+	model: string;
+	approvalPolicy: ApprovalPolicy;
+	networkAccess: boolean;
+	allowWrite: boolean;
+	sandbox: SandboxMode;
+}) {
 	return {
-		agentId: task.agentId,
-		prompt: task.prompt,
 		cwd: task.cwd,
 		model: task.model,
-		effort: task.effort,
 		approvalPolicy: task.approvalPolicy,
 		networkAccess: task.networkAccess,
 		allowWrite: task.allowWrite,
 		sandbox: task.sandbox,
 	};
 }
-async function launchTask(deps: SpawnToolDeps, task: SpawnPreparedTask) {
+async function launchTask(deps: SpawnToolDeps, task: ReturnType<typeof readTaskContext>) {
 	try {
-		const thread = await deps.client.startThread({
-			model: task.model,
-			cwd: task.cwd,
-			approvalPolicy: task.approvalPolicy,
-			networkAccess: task.networkAccess,
-			allowWrite: task.allowWrite,
-			sandbox: task.sandbox,
-		});
+		const thread = await deps.client.startThread(buildThreadLaunchOptions(task));
 		deps.registry.markThreadAttached(task.agentId, { threadId: thread.thread.id });
 		const turn = await deps.client.startTurn({
 			threadId: thread.thread.id,
 			prompt: task.prompt,
-			cwd: task.cwd,
-			model: task.model,
 			effort: task.effort,
-			approvalPolicy: task.approvalPolicy,
-			networkAccess: task.networkAccess,
-			allowWrite: task.allowWrite,
-			sandbox: task.sandbox,
+			...buildThreadLaunchOptions(task),
 		});
-		deps.registry.markThreadAttached(task.agentId, {
+		recordStartedTurn(deps.registry, {
+			agentId: task.agentId,
 			threadId: thread.thread.id,
-			activeTurnId: turn.turn.id,
+			turnId: turn.turn.id,
+			prompt: task.prompt,
 		});
-		deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
-		deps.registry.appendUserMessage(task.agentId, turn.turn.id, task.prompt);
 	} catch (error) {
-		deps.registry.markAgentError(task.agentId, error instanceof Error ? error.message : String(error));
+		deps.registry.markAgentError(task.agentId,
+			error instanceof Error ? error.message : String(error));
 		throw error;
 	}
 }
@@ -388,7 +332,7 @@ async function runTasks(input: {
 			resolveSandboxMode: input.execution.resolveSandboxMode,
 		});
 		seedTaskAgent(input.context, taskContext, input.execution.deps);
-		await launchTask(input.execution.deps, toPreparedTask(taskContext));
+		await launchTask(input.execution.deps, taskContext);
 	}
 }
 async function waitForResults(context: SpawnBatchContext, input: SpawnExecutionInput) {

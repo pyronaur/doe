@@ -1,4 +1,4 @@
-import { formatUsageCompact, type AgentUsageSnapshot } from "../context-usage.js";
+import { type AgentUsageSnapshot, formatUsageCompact } from "../context-usage.ts";
 
 type AgentProgressState = "working" | "completed" | "error" | "awaiting_input" | "finalized";
 type AgentProgressActivity = string | null | undefined;
@@ -15,12 +15,16 @@ export interface AgentProgressShape {
 }
 
 function shouldEllipsizeActivity(label: string): boolean {
-	if (!label) return false;
-	if (/[.!?…:]$/.test(label)) return false;
+	if (!label) { return false; }
+	if (/[.!?…:]$/.test(label)) { return false; }
 	return !label.startsWith("awaiting ") && label !== "completed" && label !== "error";
 }
 
-export function formatElapsed(startedAt: number, completedAt?: number | null, now = Date.now()): string {
+export function formatElapsed(
+	startedAt: number,
+	completedAt?: number | null,
+	now = Date.now(),
+): string {
 	const end = completedAt ?? now;
 	const seconds = Math.max(0, Math.floor((end - startedAt) / 1000));
 	const mins = Math.floor(seconds / 60);
@@ -32,11 +36,15 @@ export function formatElapsed(startedAt: number, completedAt?: number | null, no
 	return `${mins}m ${String(secs).padStart(2, "0")}s`;
 }
 
-export function resolveRunStartedAt(agent: Pick<AgentProgressShape, "startedAt" | "runStartedAt">): number {
+export function resolveRunStartedAt(
+	agent: Pick<AgentProgressShape, "startedAt" | "runStartedAt">,
+): number {
 	return agent.runStartedAt ?? agent.startedAt;
 }
 
-export function formatAgentActivity(agent: Pick<AgentProgressShape, "activityLabel" | "state">): string {
+export function formatAgentActivity(
+	agent: Pick<AgentProgressShape, "activityLabel" | "state">,
+): string {
 	const label = (agent.activityLabel ?? agent.state).trim();
 	return shouldEllipsizeActivity(label) ? `${label}...` : label;
 }
@@ -49,7 +57,9 @@ export function formatAgentProgressLine(
 	} = {},
 ): string {
 	const includeName = options.includeName ?? true;
-	const title = includeName ? `${agent.seatName ?? agent.name} ${formatAgentActivity(agent)}` : formatAgentActivity(agent);
+	const title = includeName
+		? `${agent.seatName ?? agent.name} ${formatAgentActivity(agent)}`
+		: formatAgentActivity(agent);
 	const usage = formatUsageCompact(agent.usage);
 	const meta = [
 		usage === "ctx n/a" ? null : usage,

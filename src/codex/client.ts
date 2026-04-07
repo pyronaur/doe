@@ -254,7 +254,9 @@ function getThreadItemPath(item: any): string | null {
 	]);
 }
 
-function getThreadItemDiffStats(item: any): { addedLines: number | null; removedLines: number | null } {
+function getThreadItemDiffStats(
+	item: any,
+): { addedLines: number | null; removedLines: number | null } {
 	const addedLines = findNestedNumber(item, [
 		"addedLines",
 		"linesAdded",

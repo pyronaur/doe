@@ -1,50 +1,18 @@
-import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import type { CodexAppServerClient } from "../codex/app-server-client.ts";
-import type { SandboxMode } from "../codex/client.ts";
 import type { DoeRegistry } from "../roster/registry.ts";
 import { readToolProgressSummary } from "./progress-updates.ts";
+import { resolveSandboxMode } from "./sandbox-mode.ts";
+import { SpawnParametersFields, SpawnTaskFields } from "./shared-schemas.ts";
 import { resolveSpawnRenderBody } from "./spawn-result.ts";
 import { createSpawnExecuteHandler, normalizeMultiTaskArgs } from "./spawn-runtime.ts";
-
-const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
-const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
-const SandboxSchema = StringEnum(["read-only", "workspace-write", "danger-full-access"] as const);
-const RoleSchema = StringEnum(["researcher", "senior", "mid", "junior", "intern"] as const);
-
-const TaskSchema = Type.Object({
-	name: Type.Optional(Type.String()),
-	ic: Type.Optional(Type.String()),
-	role: Type.Optional(RoleSchema),
-	prompt: Type.String(),
-	cwd: Type.Optional(Type.String()),
-	model: Type.Optional(Type.String()),
-	effort: Type.Optional(EffortSchema),
-	template: Type.Optional(Type.String()),
-	templateVariables: Type.Optional(Type.Record(Type.String(), Type.Any())),
-	approvalPolicy: Type.Optional(ApprovalSchema),
-	networkAccess: Type.Optional(Type.Boolean()),
-	allowWrite: Type.Optional(Type.Boolean()),
-	sandbox: Type.Optional(SandboxSchema),
-});
+const TaskSchema = Type.Object(SpawnTaskFields);
 
 const SpawnParametersSchema = Type.Object({
 	tasks: Type.Optional(Type.Array(TaskSchema, { minItems: 1, maxItems: 8 })),
-	name: Type.Optional(Type.String()),
-	ic: Type.Optional(Type.String()),
-	role: Type.Optional(RoleSchema),
-	prompt: Type.Optional(Type.String()),
-	cwd: Type.Optional(Type.String()),
-	model: Type.Optional(Type.String()),
-	effort: Type.Optional(EffortSchema),
-	template: Type.Optional(Type.String()),
-	templateVariables: Type.Optional(Type.Record(Type.String(), Type.Any())),
-	approvalPolicy: Type.Optional(ApprovalSchema),
-	networkAccess: Type.Optional(Type.Boolean()),
-	allowWrite: Type.Optional(Type.Boolean()),
-	sandbox: Type.Optional(SandboxSchema),
+	...SpawnParametersFields,
 	batchName: Type.Optional(Type.String()),
 });
 
@@ -99,18 +67,7 @@ function createSpawnTool(
 	};
 }
 
-export function resolveSandboxMode(
-	role: "researcher" | "senior" | "mid" | "junior" | "intern" | null | undefined,
-	sandbox?: SandboxMode | null,
-): SandboxMode {
-	if (role === "researcher" || role === "senior") {
-		return "danger-full-access";
-	}
-	if (role === "mid") {
-		return sandbox === "danger-full-access" ? "danger-full-access" : "workspace-write";
-	}
-	return "read-only";
-}
+export { resolveSandboxMode } from "./sandbox-mode.ts";
 
 export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 	pi.registerTool(
@@ -118,7 +75,8 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			{
 				name: "codex_spawn",
 				label: "Codex Spawn",
-				description: "Spawn one or more named IC assignments. Each task gets its own thread and seat.",
+				description:
+					"Spawn one or more named IC assignments. Each task gets its own thread and seat.",
 				promptSnippet:
 					"Spawn new Codex workers for scanning, research, planning, or implementation. Use tasks[] for parallel independent work.",
 				promptGuidelines: [

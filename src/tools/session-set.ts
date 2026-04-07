@@ -1,7 +1,8 @@
-import { Type } from "@sinclair/typebox";
-import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { ensureSessionWorkspace, prepareSessionWorkspace } from "../plan/slug.js";
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+import { ensureSessionWorkspace, prepareSessionWorkspace } from "../plan/slug.ts";
+import { renderToolResultText } from "./tool-render.ts";
 
 function formatReuseError(result: ReturnType<typeof prepareSessionWorkspace>): string {
 	const lines = result.existingEntries.map((entry) => `- ${entry}`);
@@ -26,10 +27,10 @@ export function registerSessionSetTool(pi: ExtensionAPI) {
 			allowExisting: Type.Optional(Type.Boolean()),
 		}),
 		renderCall(args, theme) {
-			return new Text(theme.fg("accent", `session_set ${(args as any).sessionSlug ?? ""}`.trim()), 0, 0);
+			return new Text(theme.fg("accent", `session_set ${args.sessionSlug ?? ""}`.trim()), 0, 0);
 		},
 		renderResult(result, _options, theme) {
-			return new Text(theme.fg("accent", result.content?.[0]?.text ?? "session_set"), 0, 0);
+			return renderToolResultText(theme, result, "session_set");
 		},
 		async execute(_toolCallId, params) {
 			const result = prepareSessionWorkspace({
@@ -47,7 +48,9 @@ export function registerSessionSetTool(pi: ExtensionAPI) {
 			const content = [
 				`session_slug: ${result.sessionSlug}`,
 				`workspace: ${result.workspacePath}`,
-				result.requestedSlug === result.sessionSlug ? null : `normalized_from: ${result.requestedSlug}`,
+				result.requestedSlug === result.sessionSlug
+					? null
+					: `normalized_from: ${result.requestedSlug}`,
 			]
 				.filter(Boolean)
 				.join("\n");

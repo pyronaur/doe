@@ -17,8 +17,9 @@ import { IC_CONFIG } from "./roster/config.ts";
 import { DoeRegistry } from "./roster/registry.ts";
 import type { PersistedRegistrySnapshot, RegistryEvent } from "./roster/types.ts";
 import { loadMarkdownDoc } from "./templates/loader.ts";
-import { AgentLiveViewController } from "./ui/agent-live-view.ts";
+import { AgentLiveViewController } from "./ui/agent-live-controller.ts";
 import { formatDoeStatus } from "./ui/doe-status.ts";
+import { isRecord } from "./utils/guards.ts";
 
 const DOE_FLAG = "doe";
 const TOOL_NAMES = ensureReadToolActive([
@@ -73,10 +74,6 @@ export interface DoeExtensionContext {
 export interface DoeState {
 	pi: ExtensionAPI;
 	runtime: DoeRuntime | null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isDoeRegistrySnapshot(value: unknown): value is PersistedRegistrySnapshot {
@@ -254,7 +251,10 @@ function handleTurnCompletedEvent(
 	);
 }
 
-function handleErrorEvent(runtime: DoeRuntime, event: Extract<CodexClientEvent, { type: "error" }>) {
+function handleErrorEvent(
+	runtime: DoeRuntime,
+	event: Extract<CodexClientEvent, { type: "error" }>,
+) {
 	if (!event.threadId) {
 		return;
 	}
@@ -321,9 +321,11 @@ export function formatCompactRosterSummary(): string {
 		names.push(ic.name);
 		grouped.set(ic.role, names);
 	}
-	return `IC roster: ${Array.from(grouped.entries())
-		.map(([role, names]) => `${role}: ${names.join(", ")}`)
-		.join(" | ")}`;
+	return `IC roster: ${
+		Array.from(grouped.entries())
+			.map(([role, names]) => `${role}: ${names.join(", ")}`)
+			.join(" | ")
+	}`;
 }
 
 export function createDoeState(pi: ExtensionAPI): DoeState {

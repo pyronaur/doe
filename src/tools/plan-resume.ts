@@ -1,9 +1,8 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import type { CodexAppServerClient } from "../codex/app-server-client.ts";
 import { truncateForDisplay } from "../codex/client.ts";
-import { formatCompactionSignal, formatUsageCompact } from "../context-usage.ts";
+import { formatUsageCompact } from "../context-usage.ts";
 import {
 	buildPlanResumePrompt,
 	getSharedKnowledgebaseContext,
@@ -12,22 +11,18 @@ import {
 } from "../plan/flow.ts";
 import type { DoePlanReviewResult } from "../plan/review.ts";
 import type { DoePlanState } from "../plan/session-state.ts";
-import type { DoeRegistry } from "../roster/registry.ts";
-
-interface PlanResumeToolDeps {
-	client: CodexAppServerClient;
-	registry: DoeRegistry;
-	templatesDir: string;
-	reviewPlan: (
-		input: { planFilePath: string; cwd: string; signal?: AbortSignal },
-	) => Promise<DoePlanReviewResult>;
-	getSessionSlug: () => string | null;
-	getPlanState: () => DoePlanState;
-	setPlanState: (
-		updater: (state: DoePlanState) => DoePlanState,
-		options?: { flush?: boolean },
-	) => DoePlanState;
-}
+import { resolveAgentFinalOutput } from "./agent-final-output.ts";
+import { formatContextStatusLines } from "./context-status.ts";
+import {
+	formatPlanReviewSummary,
+	formatPlanRevisionNextStep,
+	type PlanWorkflowToolDeps,
+	setPlanReadyForReview,
+	setPlanReviewOutcome,
+} from "./plan-workflow.ts";
+import { resumeThreadAndStartTurn, steerActiveTurn } from "./thread-turn.ts";
+import { renderToolResultText } from "./tool-render.ts";
+type PlanResumeToolDeps = PlanWorkflowToolDeps;
 
 interface PlanResumeWorkflowInput {
 	deps: PlanResumeToolDeps;
@@ -38,7 +33,7 @@ interface PlanResumeWorkflowInput {
 interface PlanResumeSeedInput {
 	deps: PlanResumeToolDeps;
 	agent: any;
-	templateDefaults: { model: string; effort: string | undefined };
+	templateDefaults: ReturnType<typeof readPlanTemplateDefaults>;
 	prompt: string;
 }
 
@@ -46,7 +41,7 @@ interface PlanResumeTurnInput {
 	deps: PlanResumeToolDeps;
 	agent: any;
 	prompt: string;
-	templateDefaults: { model: string; effort: string | undefined };
+	templateDefaults: ReturnType<typeof readPlanTemplateDefaults>;
 	allowWrite: boolean;
 }
 
@@ -73,31 +68,6 @@ interface PlanResumeRevisionInput {
 	signal?: AbortSignal | undefined;
 }
 
-function resolveAgentFinalOutput(agent: any): string {
-	const lastAgentMessage = [...(agent?.messages ?? [])]
-		.reverse()
-		.find((message: any) =>
-			message?.role === "agent" && typeof message?.text === "string"
-			&& message.text.trim().length > 0
-		)?.text;
-	return agent?.latestFinalOutput ?? lastAgentMessage ?? agent?.latestSnippet ?? "Completed";
-}
-
-function formatPlanReviewSummary(review: DoePlanReviewResult): string[] {
-	if (!review.feedback) {return [];}
-	return ["", "<review_feedback>", review.feedback, "</review_feedback>"];
-}
-
-function formatPlanResumeNextStep(review: DoePlanReviewResult): string[] {
-	if (review.status !== "needs_revision") {return [];}
-	return [
-		"",
-		"<next_step>",
-		"Review feedback is stored automatically. Use plan_resume with Director commentary only.",
-		"</next_step>",
-	];
-}
-
 async function retryPlanReview(input: {
 	reviewPlan: PlanResumeToolDeps["reviewPlan"];
 	state: DoePlanState["activePlan"];
@@ -119,6 +89,19 @@ async function retryPlanReview(input: {
 	}
 }
 
+function reviewActivePlan(
+	deps: PlanResumeToolDeps,
+	state: DoePlanState["activePlan"],
+	signal?: AbortSignal,
+) {
+	return retryPlanReview({
+		reviewPlan: deps.reviewPlan,
+		state,
+		cwd: process.cwd(),
+		signal,
+	});
+}
+
 const PLAN_RESUME_TOOL_META = {
 	name: "plan_resume",
 	label: "Plan Resume",
@@ -133,14 +116,14 @@ const PLAN_RESUME_TOOL_META = {
 	],
 	parameters: Type.Object({
 		commentary: Type.Optional(Type.String({
-			description: "Director synthesis to guide the IC revision. Do not relay CTO review feedback here - it is injected automatically.",
+			description:
+				"Director synthesis to guide the IC revision. Do not relay CTO review feedback here - it is injected automatically.",
 		})),
 	}),
 } as const;
 
 function buildPlanResumeResult(input: PlanResumeResultInput) {
 	const { agent, sessionSlug, planSlug, planFilePath, review } = input;
-	const compaction = formatCompactionSignal(agent.compaction);
 	const ic = agent.seatName ?? agent.name ?? "unknown";
 	return {
 		content: [{
@@ -150,11 +133,11 @@ function buildPlanResumeResult(input: PlanResumeResultInput) {
 				`plan_slug: ${planSlug}`,
 				`state: ${review.status}`,
 				`context: ${formatUsageCompact(agent.usage)}`,
-				...(compaction ? [`context_status: ${compaction}`] : []),
+				...formatContextStatusLines(agent.compaction),
 				`plan_file: ${planFilePath}`,
 				`review_status: ${review.status}`,
 				...formatPlanReviewSummary(review),
-				...formatPlanResumeNextStep(review),
+				...formatPlanRevisionNextStep(review),
 				"",
 				resolveAgentFinalOutput(agent),
 				...(review.status === "approved" ? ["", "Plan approved. Workflow cleared."] : []),
@@ -173,7 +156,7 @@ function buildPlanResumeResult(input: PlanResumeResultInput) {
 }
 
 function resolvePlanResumeAgent(registry: DoeRegistry, state: DoePlanState["activePlan"]) {
-	if (!state) {return null;}
+	if (!state) { return null; }
 	return (state.agentId && registry.findAgent(state.agentId))
 		?? (state.threadId && registry.findAgent(state.threadId))
 		?? null;
@@ -202,39 +185,31 @@ function seedPlanResumeAgent(input: PlanResumeSeedInput) {
 
 async function runPlanResumeTurn(input: PlanResumeTurnInput) {
 	const { deps, agent, prompt, templateDefaults, allowWrite } = input;
-	if (agent.activeTurnId && agent.state === "working") {
-		await deps.client.steerTurn({
-			threadId: agent.threadId,
-			expectedTurnId: agent.activeTurnId,
+	if (
+		await steerActiveTurn({
+			client: deps.client,
+			registry: deps.registry,
+			agent,
 			prompt,
-		});
-		deps.registry.appendUserMessage(agent.id, agent.activeTurnId, prompt);
+		})
+	) {
 		return;
 	}
 
-	await deps.client.resumeThread({
-		threadId: agent.threadId,
-		cwd: agent.cwd,
-		model: templateDefaults.model,
-		approvalPolicy: "never",
-		allowWrite,
-	});
-	const turn = await deps.client.startTurn({
-		threadId: agent.threadId,
+	const resumeInput = {
 		prompt,
+		allowWrite,
+		threadId: agent.threadId,
+		agentId: agent.id,
 		cwd: agent.cwd,
 		model: templateDefaults.model,
 		effort: templateDefaults.effort,
-		approvalPolicy: "never",
 		networkAccess: false,
-		allowWrite,
-	});
-	deps.registry.markThreadAttached(agent.id, {
-		threadId: agent.threadId,
-		activeTurnId: turn.turn.id,
-	});
-	deps.registry.markTurnStarted(agent.threadId, turn.turn.id);
-	deps.registry.appendUserMessage(agent.id, turn.turn.id, prompt);
+		approvalPolicy: "never" as const,
+		client: deps.client,
+		registry: deps.registry,
+	};
+	await resumeThreadAndStartTurn(resumeInput);
 }
 
 async function handlePlanResumeReviewRetry(input: PlanResumeRetryInput) {
@@ -242,27 +217,12 @@ async function handlePlanResumeReviewRetry(input: PlanResumeRetryInput) {
 	if (!state) {
 		throw new Error("No active planning workflow exists. Use plan_start first.");
 	}
-	const review = await retryPlanReview({
-		reviewPlan: deps.reviewPlan,
-		state,
-		cwd: process.cwd(),
-		signal,
-	});
-	deps.setPlanState(
-		(current) => ({
-			...current,
-				activePlan: current.activePlan?.planFilePath === state.planFilePath
-					? review.status === "approved"
-						? null
-						: {
-							...current.activePlan,
-							status: "needs_revision",
-							reviewFeedback: review.feedback,
-						}
-					: current.activePlan,
-			}),
-			{ flush: true },
-		);
+	const review = await reviewActivePlan(deps, state, signal);
+	setPlanReviewOutcome(
+		deps.setPlanState,
+		(activePlan) => activePlan.planFilePath === state.planFilePath,
+		review,
+	);
 	const ic = state.ic ?? "unknown";
 	const agent = state.agentId ? deps.registry.findAgent(state.agentId) ?? null : null;
 	return {
@@ -275,7 +235,7 @@ async function handlePlanResumeReviewRetry(input: PlanResumeRetryInput) {
 				`plan_file: ${state.planFilePath}`,
 				`review_status: ${review.status}`,
 				...formatPlanReviewSummary(review),
-				...formatPlanResumeNextStep(review),
+				...formatPlanRevisionNextStep(review),
 				"",
 				"Review retried without revising the plan.",
 				...(review.status === "approved" ? ["", "Plan approved. Workflow cleared."] : []),
@@ -330,40 +290,16 @@ async function handlePlanResumeRevision(input: PlanResumeRevisionInput) {
 
 	const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
 	readPlanFile(state.planFilePath);
-	deps.setPlanState(
-		(current) => ({
-			...current,
-			activePlan: current.activePlan?.agentId === agent.id
-				? {
-					...current.activePlan,
-					status: "ready_for_review",
-					reviewFeedback: null,
-				}
-				: current.activePlan,
-		}),
-		{ flush: true },
+	setPlanReadyForReview(
+		deps.setPlanState,
+		(activePlan) => activePlan.agentId === agent.id,
 	);
 
-	const review = await retryPlanReview({
-		reviewPlan: deps.reviewPlan,
-		state,
-		cwd: process.cwd(),
-		signal,
-	});
-	deps.setPlanState(
-		(current) => ({
-			...current,
-			activePlan: current.activePlan?.agentId === agent.id
-				? review.status === "approved"
-					? null
-					: {
-						...current.activePlan,
-						status: "needs_revision",
-						reviewFeedback: review.feedback,
-					}
-				: current.activePlan,
-		}),
-		{ flush: true },
+	const review = await reviewActivePlan(deps, state, signal);
+	setPlanReviewOutcome(
+		deps.setPlanState,
+		(activePlan) => activePlan.agentId === agent.id,
+		review,
 	);
 	return buildPlanResumeResult({
 		agent: finalAgent,
@@ -422,7 +358,7 @@ function createPlanResumeTool(deps: PlanResumeToolDeps) {
 			return new Text(theme.fg("accent", "plan_resume"), 0, 0);
 		},
 		renderResult(result, _options, theme) {
-			return new Text(theme.fg("accent", result.content?.[0]?.text ?? "plan_resume"), 0, 0);
+			return renderToolResultText(theme, result, "plan_resume");
 		},
 		async execute(...args: [string, any, AbortSignal | undefined]) {
 			const [, params, signal] = args;

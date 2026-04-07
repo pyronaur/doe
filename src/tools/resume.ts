@@ -1,4 +1,3 @@
-import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
@@ -11,20 +10,18 @@ import {
 	truncateForDisplay,
 } from "../codex/client.ts";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.ts";
-import { formatCompactionSignal, formatUsageCompact } from "../context-usage.ts";
-import {
-	getSharedKnowledgebaseContext,
-	injectSharedKnowledgebaseContext,
-	type SharedKnowledgebaseContext,
-} from "../plan/flow.ts";
+import { formatUsageCompact } from "../context-usage.ts";
+import { getSharedKnowledgebaseContext } from "../plan/flow.ts";
 import type { DoeRegistry } from "../roster/registry.ts";
-import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.ts";
+import { resolveAgentFinalOutput } from "./agent-final-output.ts";
 import { cancelAgentRun } from "./cancel-agent-run.ts";
+import { formatContextStatusLines } from "./context-status.ts";
 import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.ts";
-
-const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
-const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
-const SandboxSchema = StringEnum(["read-only", "workspace-write", "danger-full-access"] as const);
+import { resolveResumeTarget } from "./resume-target.ts";
+import { resolveSandboxMode } from "./sandbox-mode.ts";
+import { AgentLookupFields, SharedExecutionOptionFields } from "./shared-schemas.ts";
+import { buildTemplatePrompt } from "./template-prompt.ts";
+import { resumeThreadAndStartTurn, steerActiveTurn } from "./thread-turn.ts";
 
 interface ResumeToolDeps {
 	client: CodexAppServerClient;
@@ -83,89 +80,18 @@ interface ResumeProgressInput {
 	ctx: ResumeWorkflowInput["ctx"];
 }
 
-function resolveAgentFinalOutput(agent: any): string | null {
-	const lastAgentMessage = [...(agent?.messages ?? [])]
-		.reverse()
-		.find((message: any) =>
-			message?.role === "agent" && typeof message?.text === "string"
-			&& message.text.trim().length > 0
-		)?.text;
-	return agent?.latestFinalOutput ?? lastAgentMessage ?? agent?.latestSnippet ?? null;
-}
-
 function buildPrompt(
 	params: any,
 	templatesDir: string,
-	sharedContext: SharedKnowledgebaseContext | null,
-): {
-	templateName: string | null;
-	prompt: string;
-	templateDefaultModel: string | null;
-	templateDefaultEffort: ReasoningEffort | null;
-} {
-	if (!params.template) {
-		return {
-			templateName: null,
-			prompt: injectSharedKnowledgebaseContext(params.prompt, sharedContext),
-			templateDefaultModel: null,
-			templateDefaultEffort: null,
-		};
-	}
-
-	const docs = loadMarkdownDocs(templatesDir);
-	const doc = docs.find((entry) => entry.name === params.template);
-	if (!doc) {
-		throw new Error(`Unknown template "${params.template}".`);
-	}
-
-	const defaultModel = readOptionalModelId(
-		doc.attributes.default_model,
-		`template "${doc.name}" default_model`,
-	);
-	const defaultEffort = doc.attributes.default_effort;
-	if (
-		defaultEffort !== "low" && defaultEffort !== "medium" && defaultEffort !== "high"
-		&& defaultEffort !== "xhigh"
-	) {
-		throw new Error(
-			`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`,
-		);
-	}
-
-	const usesTaskPlaceholder = doc.body.includes("{{task}}");
-	const rendered = renderMarkdownTemplate(doc, {
-		task: params.prompt,
-		...params.templateVariables,
-	}).trim();
-
-	return {
-		templateName: doc.name,
-		prompt: injectSharedKnowledgebaseContext(
-			usesTaskPlaceholder || !params.prompt ? rendered : `${rendered}\n\n# Task\n${params.prompt}`,
-			sharedContext,
-		),
-		templateDefaultModel: defaultModel,
-		templateDefaultEffort: defaultEffort,
-	};
-}
-
-function resolveResumeTarget(registry: DoeRegistry, params: any) {
-	if (params.ic) {
-		const active = registry.findActiveSeatAgent(params.ic);
-		if (active) {return active;}
-		if (params.reuseFinished) {
-			const finished = registry.findLastFinishedSeatAgent(params.ic);
-			if (finished) {return finished;}
-		}
-		if (registry.findSeat(params.ic)) {
-			throw new Error(
-				`No active assignment is attached to ${params.ic}. Use codex_spawn for fresh work on that seat, or set reuseFinished=true to reopen the last finished context.`,
-			);
-		}
-	}
-	if (params.agentId) {return registry.findAgent(params.agentId);}
-	if (params.threadId) {return registry.findAgent(params.threadId);}
-	return undefined;
+	sharedContext: ReturnType<typeof getSharedKnowledgebaseContext>,
+) {
+	return buildTemplatePrompt({
+		template: params.template,
+		prompt: params.prompt,
+		templatesDir,
+		templateVariables: params.templateVariables,
+		sharedContext,
+	});
 }
 
 const RESUME_TOOL_META = {
@@ -184,19 +110,10 @@ const RESUME_TOOL_META = {
 		"Waits for the worker to finish before returning and returns the worker's full final answer in content. Use that returned content directly as the worker result.",
 	],
 	parameters: Type.Object({
-		ic: Type.Optional(Type.String()),
-		agentId: Type.Optional(Type.String()),
-		threadId: Type.Optional(Type.String()),
+		...AgentLookupFields,
 		reuseFinished: Type.Optional(Type.Boolean()),
 		prompt: Type.String(),
-		model: Type.Optional(Type.String()),
-		effort: Type.Optional(EffortSchema),
-		template: Type.Optional(Type.String()),
-		templateVariables: Type.Optional(Type.Record(Type.String(), Type.Any())),
-		approvalPolicy: Type.Optional(ApprovalSchema),
-		networkAccess: Type.Optional(Type.Boolean()),
-		allowWrite: Type.Optional(Type.Boolean()),
-		sandbox: Type.Optional(SandboxSchema),
+		...SharedExecutionOptionFields,
 	}),
 } as const;
 
@@ -205,7 +122,6 @@ function isReasoningEffort(value: string | null | undefined): value is Reasoning
 }
 
 function buildResumeResult(agent: any, text: string) {
-	const compaction = formatCompactionSignal(agent.compaction);
 	return {
 		content: [{
 			type: "text",
@@ -213,7 +129,7 @@ function buildResumeResult(agent: any, text: string) {
 				`ic: ${agent.name}`,
 				`state: ${agent.state}`,
 				`context: ${formatUsageCompact(agent.usage)}`,
-				...(compaction ? [`context_status: ${compaction}`] : []),
+				...formatContextStatusLines(agent.compaction),
 				"",
 				text,
 			].join("\n"),
@@ -226,8 +142,12 @@ function resolveResumeEffort(
 	agent: any,
 	preferred: ReasoningEffort | null | undefined,
 ): ReasoningEffort {
-	if (preferred) {return preferred;}
-	if (isReasoningEffort(agent.effort)) {return agent.effort;}
+	if (preferred) {
+		return preferred;
+	}
+	if (isReasoningEffort(agent.effort)) {
+		return agent.effort;
+	}
 	return "medium";
 }
 
@@ -280,32 +200,30 @@ async function runResumeTurn(input: ResumeTurnInput) {
 		sandbox,
 		requestedAllowWrite,
 	} = input;
-	if (agent.activeTurnId && agent.state === "working") {
-		if (
-			requestedAllowWrite !== undefined && requestedAllowWrite !== (agent.allowWrite ?? false)
-		) {
+	const wasSteered = await steerActiveTurn({
+		client: deps.client,
+		registry: deps.registry,
+		agent,
+		prompt,
+		onBeforeSteer() {
+			if (
+				requestedAllowWrite === undefined || requestedAllowWrite === (agent.allowWrite ?? false)
+			) {
+				return;
+			}
 			throw new Error(
 				"Cannot change read/write permission while a turn is already running. Wait for the active turn to finish, then resume with allowWrite set for the next turn.",
 			);
-		}
-		await deps.client.steerTurn({
-			threadId: agent.threadId,
-			expectedTurnId: agent.activeTurnId,
-			prompt,
-		});
-		deps.registry.appendUserMessage(agent.id, agent.activeTurnId, prompt);
+		},
+	});
+	if (wasSteered) {
 		return;
 	}
 
-	await deps.client.resumeThread({
-		threadId: agent.threadId,
-		cwd: agent.cwd,
-		model,
-		approvalPolicy,
-		allowWrite,
-		sandbox,
-	});
-	const turn = await deps.client.startTurn({
+	await resumeThreadAndStartTurn({
+		client: deps.client,
+		registry: deps.registry,
+		agentId: agent.id,
 		threadId: agent.threadId,
 		prompt,
 		cwd: agent.cwd,
@@ -316,16 +234,10 @@ async function runResumeTurn(input: ResumeTurnInput) {
 		allowWrite,
 		sandbox,
 	});
-	deps.registry.markThreadAttached(agent.id, {
-		threadId: agent.threadId,
-		activeTurnId: turn.turn.id,
-	});
-	deps.registry.markTurnStarted(agent.threadId, turn.turn.id);
-	deps.registry.appendUserMessage(agent.id, turn.turn.id, prompt);
 }
 
 async function resolveResumeFinalText(deps: ResumeToolDeps, agent: any): Promise<string> {
-	const text = resolveAgentFinalOutput(agent);
+	const text = resolveAgentFinalOutput(agent, null);
 	if (text || !agent.threadId) {
 		return text ?? "Completed";
 	}
@@ -376,11 +288,15 @@ function startResumeProgressUpdates(input: ResumeProgressInput) {
 			partial: true,
 		},
 		onProgressSummary(summary) {
-			if (!ctx?.hasUI) {return;}
+			if (!ctx?.hasUI) {
+				return;
+			}
 			ctx.ui.setWorkingMessage(summary);
 		},
 		onStop() {
-			if (!ctx?.hasUI) {return;}
+			if (!ctx?.hasUI) {
+				return;
+			}
 			ctx.ui.setWorkingMessage();
 		},
 	});
@@ -424,12 +340,12 @@ async function executeResumeWorkflow(input: ResumeWorkflowInput) {
 			prompt: runtime.prompt,
 			model: runtime.model,
 			effort: runtime.effort,
-				approvalPolicy: runtime.approvalPolicy,
-				networkAccess: runtime.networkAccess,
-				allowWrite: runtime.allowWrite,
-				sandbox: runtime.sandbox,
-				requestedAllowWrite: runtime.requestedAllowWrite,
-			});
+			approvalPolicy: runtime.approvalPolicy,
+			networkAccess: runtime.networkAccess,
+			allowWrite: runtime.allowWrite,
+			sandbox: runtime.sandbox,
+			requestedAllowWrite: runtime.requestedAllowWrite,
+		});
 		const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
 		const text = await resolveResumeFinalText(deps, finalAgent);
 		return buildResumeResult(finalAgent, text);
@@ -463,12 +379,11 @@ function createResumeTool(deps: ResumeToolDeps) {
 				return new Container();
 			}
 			const agent = result.details?.agent;
+			const contextStatus = formatContextStatusLines(agent?.compaction)
+				.map((line) => line.replace("context_status: ", ""))
+				.join(" ");
 			const preview = truncateForDisplay(
-				`${formatUsageCompact(agent?.usage)}${
-					formatCompactionSignal(agent?.compaction)
-						? ` ${formatCompactionSignal(agent?.compaction)}`
-						: ""
-				} ${
+				`${formatUsageCompact(agent?.usage)} ${contextStatus} ${
 					agent?.latestFinalOutput ?? agent?.latestSnippet ?? result.content?.[0]?.text ?? "Resumed"
 				}`,
 				240,
@@ -490,10 +405,8 @@ function createResumeTool(deps: ResumeToolDeps) {
 	};
 }
 
-export function resolveSandboxMode(role: string | null | undefined, sandbox?: SandboxMode | null): SandboxMode {
-	if (role === "researcher" || role === "senior") {return "danger-full-access";}
-	if (role === "mid") {return sandbox === "danger-full-access" ? "danger-full-access" : "workspace-write";}
-	return "read-only";
-}
+export { resolveSandboxMode } from "./sandbox-mode.ts";
 
-export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {pi.registerTool(createResumeTool(deps));}
+export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
+	pi.registerTool(createResumeTool(deps));
+}

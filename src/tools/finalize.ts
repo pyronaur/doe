@@ -1,15 +1,19 @@
-import { Type } from "@sinclair/typebox";
-import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
-import type { DoeRegistry } from "../roster/registry.js";
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+import { formatUsageCompact } from "../context-usage.ts";
+import type { DoeRegistry } from "../roster/registry.ts";
+import { formatContextStatusLines } from "./context-status.ts";
+import { renderToolResultText } from "./tool-render.ts";
 
 export function registerFinalizeTool(pi: ExtensionAPI, deps: { registry: DoeRegistry }) {
 	pi.registerTool({
 		name: "codex_finalize",
 		label: "Codex Finalize",
-		description: "Finalize a named IC seat after non-working work is done and the seat should be released.",
-		promptSnippet: "Finalize a named IC seat when a completed or awaiting-input assignment is done and the seat should be released.",
+		description:
+			"Finalize a named IC seat after non-working work is done and the seat should be released.",
+		promptSnippet:
+			"Finalize a named IC seat when a completed or awaiting-input assignment is done and the seat should be released.",
 		promptGuidelines: [
 			"Requires ic. This is a named-seat operation.",
 			"Use only after the assignment is no longer actively running.",
@@ -22,10 +26,10 @@ export function registerFinalizeTool(pi: ExtensionAPI, deps: { registry: DoeRegi
 			reuseSummary: Type.Optional(Type.String()),
 		}),
 		renderCall(args, theme) {
-			return new Text(theme.fg("accent", `codex_finalize ${(args as any).ic}`), 0, 0);
+			return new Text(theme.fg("accent", `codex_finalize ${args.ic}`), 0, 0);
 		},
 		renderResult(result, _options, theme) {
-			return new Text(theme.fg("accent", result.content?.[0]?.text ?? "Finalized"), 0, 0);
+			return renderToolResultText(theme, result, "Finalized");
 		},
 		async execute(_toolCallId, params) {
 			const { seat, agent } = deps.registry.finalizeSeat(params.ic, {
@@ -39,7 +43,7 @@ export function registerFinalizeTool(pi: ExtensionAPI, deps: { registry: DoeRegi
 						`ic: ${seat.name}`,
 						"state: finalized",
 						`context: ${formatUsageCompact(agent.usage)}`,
-						...(formatCompactionSignal(agent.compaction) ? [`context_status: ${formatCompactionSignal(agent.compaction)}`] : []),
+						...formatContextStatusLines(agent.compaction),
 						...(seat.lastFinishNote ? [`finish_note: ${seat.lastFinishNote}`] : []),
 						...(seat.lastReuseSummary ? [`reuse_summary: ${seat.lastReuseSummary}`] : []),
 					].join("\n"),

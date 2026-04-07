@@ -1,4 +1,4 @@
-import { isToolCallEventType, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -13,10 +13,10 @@ import {
 	updateUi,
 } from "./doe-core.ts";
 import type { DoeExtensionContext } from "./doe-core.ts";
-import { clonePlanState } from "./plan/session-state.ts";
-import { evaluateReadGate } from "./read-gate.ts";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./plan/reminder.ts";
 import { runPlanReviewCli } from "./plan/review.ts";
+import { clonePlanState } from "./plan/session-state.ts";
+import { evaluateReadGate } from "./read-gate.ts";
 import { loadMarkdownDocs, summarizeTemplates } from "./templates/loader.ts";
 import { registerCancelTool } from "./tools/cancel.ts";
 import { registerFinalizeTool } from "./tools/finalize.ts";
@@ -42,31 +42,28 @@ function registerRuntimeTools(
 ) {
 	const getSessionSlug = () => state.pi.getSessionName() ?? null;
 	const getPlanState = () => clonePlanState(runtime.planState);
+	const updatePlan = (
+		updater: (state: typeof runtime.planState) => typeof runtime.planState,
+		options?: { flush?: boolean },
+	) => updatePlanState(state, updater, options);
+	const planToolDeps = {
+		client: runtime.client,
+		registry: runtime.registry,
+		templatesDir: TEMPLATES_DIR,
+		reviewPlan: runPlanReviewCli,
+		getSessionSlug,
+		getPlanState,
+		setPlanState: updatePlan,
+	};
 
 	registerSessionSetTool(state.pi);
-	registerPlanStartTool(state.pi, {
-		client: runtime.client,
-		registry: runtime.registry,
-		templatesDir: TEMPLATES_DIR,
-		reviewPlan: runPlanReviewCli,
-		getSessionSlug,
-		getPlanState,
-		setPlanState: (updater, options) => updatePlanState(state, updater, options),
-	});
-	registerPlanResumeTool(state.pi, {
-		client: runtime.client,
-		registry: runtime.registry,
-		templatesDir: TEMPLATES_DIR,
-		reviewPlan: runPlanReviewCli,
-		getSessionSlug,
-		getPlanState,
-		setPlanState: (updater, options) => updatePlanState(state, updater, options),
-	});
+	registerPlanStartTool(state.pi, planToolDeps);
+	registerPlanResumeTool(state.pi, planToolDeps);
 	registerPlanStopTool(state.pi, {
 		client: runtime.client,
 		registry: runtime.registry,
 		getPlanState,
-		setPlanState: (updater, options) => updatePlanState(state, updater, options),
+		setPlanState: updatePlan,
 	});
 	registerSpawnTool(state.pi, {
 		client: runtime.client,
@@ -112,7 +109,8 @@ function activateRuntime(
 function buildPlanRevisionReminder() {
 	return {
 		customType: "doe-plan-revision-reminder",
-		content: "Plan feedback is stored automatically. Call plan_resume with Director commentary only.",
+		content:
+			"Plan feedback is stored automatically. Call plan_resume with Director commentary only.",
 		display: false,
 	};
 }
@@ -156,7 +154,7 @@ function registerDoeUiHandlers(state: ReturnType<typeof createDoeState>) {
 
 function registerDoeSessionHandlers(state: ReturnType<typeof createDoeState>) {
 	const { pi } = state;
-	pi.on("session_start", async (_event, ctx) => {
+	const restoreSessionContext = async (ctx: DoeExtensionContext) => {
 		const activeRuntime = activateRuntime(state, ctx);
 		if (!activeRuntime) {
 			return;
@@ -164,16 +162,14 @@ function registerDoeSessionHandlers(state: ReturnType<typeof createDoeState>) {
 		applyToolSurface(state);
 		await restoreState(state, ctx);
 		updateUi(state, ctx);
+	};
+
+	pi.on("session_start", async (_event, ctx) => {
+		await restoreSessionContext(ctx);
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
-		const activeRuntime = activateRuntime(state, ctx);
-		if (!activeRuntime) {
-			return;
-		}
-		applyToolSurface(state);
-		await restoreState(state, ctx);
-		updateUi(state, ctx);
+		await restoreSessionContext(ctx);
 	});
 
 	pi.on("context", async (event, ctx) => {

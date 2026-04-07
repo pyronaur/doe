@@ -1,10 +1,12 @@
 function normalizeTaskName(name: unknown): string | null {
-	if (typeof name !== "string") return null;
+	if (typeof name !== "string") {
+		return null;
+	}
 	const trimmed = name.trim();
 	return trimmed.length > 0 ? trimmed : null;
 }
 
-function inferName(prompt: string): string {
+export function inferName(prompt: string): string {
 	const words = prompt.replace(/\s+/g, " ").trim().split(" ").filter(Boolean).slice(0, 2);
 	return words.join(" ") || "delegate";
 }

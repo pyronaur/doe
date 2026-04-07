@@ -5,11 +5,13 @@ import {
 	contractorNumber,
 	defaultSeatRecord,
 	findICConfigByName,
+	highestContractorNumber,
 	normalizeAgentRecord,
+	normalizeSeatLinks,
 	normalizeSeatName,
 } from "./registry-helpers.ts";
 import { DoeRegistryRuntime } from "./registry-runtime.ts";
-import type { PersistedRegistrySnapshot, PersistedRosterSnapshot } from "./types.ts";
+import type { PersistedRegistrySnapshot, PersistedRosterSnapshot, SeatRole } from "./types.ts";
 
 export class DoeRegistry extends DoeRegistryRuntime {
 	serialize(): PersistedRegistrySnapshot {
@@ -57,39 +59,43 @@ export class DoeRegistry extends DoeRegistryRuntime {
 			const normalizedName = normalizeSeatName(seat.name);
 			const ic = findICConfigByName(seat.name);
 			if (ic) {
-				this.seats.set(normalizedName, {
-					...defaultSeatRecord({ name: ic.name, role: ic.role, model: ic.defaults.model }),
-					activeAgentId: seat.activeAgentId ?? null,
-					lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
-					lastThreadId: seat.lastThreadId ?? null,
-					lastFinishNote: seat.lastFinishNote ?? null,
-					lastReuseSummary: seat.lastReuseSummary ?? null,
-				});
+				this.restoreSeat(normalizedName, {
+					name: ic.name,
+					role: ic.role,
+					model: ic.defaults.model,
+				}, seat);
 				continue;
 			}
 			const number = contractorNumber(seat.name);
-			if (number === null) {continue;}
+			if (number === null) { continue; }
 			if (typeof seat.model !== "string" || !seat.model.trim()) {
 				throw new Error(`Stored contractor seat "${seat.name}" is missing a model.`);
 			}
-			this.seats.set(normalizedName, {
-				...defaultSeatRecord({
-					name: `contractor-${number}`,
-					role: "contractor",
-					model: seat.model.trim(),
-				}),
-				activeAgentId: seat.activeAgentId ?? null,
-				lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
-				lastThreadId: seat.lastThreadId ?? null,
-				lastFinishNote: seat.lastFinishNote ?? null,
-				lastReuseSummary: seat.lastReuseSummary ?? null,
-			});
+			this.restoreSeat(normalizedName, {
+				name: `contractor-${number}`,
+				role: "contractor",
+				model: seat.model.trim(),
+			}, seat);
 		}
-		const highestSeen = Math.max(
-			0,
-			...this.listRosterSeats().map((seat) => contractorNumber(seat.name) ?? 0),
+		this.nextContractorNumber = Math.max(
+			roster.nextContractorNumber ?? 1,
+			highestContractorNumber(this.listRosterSeats()) + 1,
 		);
-		this.nextContractorNumber = Math.max(roster.nextContractorNumber ?? 1, highestSeen + 1);
+	}
+
+	private restoreSeat(
+		normalizedName: string,
+		input: { name: string; role: SeatRole; model: string },
+		seat: PersistedRosterSnapshot["seats"][number],
+	) {
+		this.seats.set(normalizedName, {
+			...defaultSeatRecord({
+				name: input.name,
+				role: input.role,
+				model: input.model,
+			}),
+			...normalizeSeatLinks(seat),
+		});
 	}
 
 	private migrateLegacyRosterLinks() {
@@ -101,9 +107,9 @@ export class DoeRegistry extends DoeRegistryRuntime {
 					&& ATTACHED_STATES.has(entry.state)
 					&& !(this.seats.get(normalizeSeatName(ic.name))?.activeAgentId),
 			);
-			if (!agent) {continue;}
+			if (!agent) { continue; }
 			const seat = this.seats.get(normalizeSeatName(ic.name));
-			if (!seat) {continue;}
+			if (!seat) { continue; }
 			const nextSeat = {
 				...seat,
 				activeAgentId: agent.id,
@@ -127,21 +133,26 @@ export class DoeRegistry extends DoeRegistryRuntime {
 
 	private ensureSeatRecords() {
 		for (const agent of this.agents.values()) {
-			if (!agent.seatName) {continue;}
+			if (!agent.seatName) { continue; }
 			const key = normalizeSeatName(agent.seatName);
 			const existing = this.seats.get(key);
 			if (!existing) {
 				const ic = findICConfigByName(agent.seatName);
 				if (ic) {
-					this.seats.set(key, defaultSeatRecord({ name: ic.name, role: ic.role, model: ic.defaults.model }));
+					this.seats.set(key,
+						defaultSeatRecord({ name: ic.name, role: ic.role, model: ic.defaults.model }));
 					continue;
-					}
-					const number = contractorNumber(agent.seatName);
-					if (number === null) {continue;}
-					this.seats.set(key, defaultSeatRecord({ name: `contractor-${number}`, role: "contractor", model: agent.model }));
 				}
+				const number = contractorNumber(agent.seatName);
+				if (number === null) { continue; }
+				this.seats.set(key, defaultSeatRecord({
+					name: `contractor-${number}`,
+					role: "contractor",
+					model: agent.model,
+				}));
 			}
 		}
+	}
 
 	private repairSeatLinks() {
 		for (const seat of this.seats.values()) {
@@ -164,9 +175,9 @@ export class DoeRegistry extends DoeRegistryRuntime {
 
 	private reconcileAgentSeats() {
 		for (const [id, agent] of this.agents.entries()) {
-			if (!agent.seatName) {continue;}
+			if (!agent.seatName) { continue; }
 			const seat = this.seats.get(normalizeSeatName(agent.seatName));
-			if (!seat) {continue;}
+			if (!seat) { continue; }
 			const next = {
 				...cloneAgent(agent),
 				name: seat.name,
@@ -188,10 +199,9 @@ export class DoeRegistry extends DoeRegistryRuntime {
 	}
 
 	private updateNextContractorNumber() {
-		const highestSeen = Math.max(
-			0,
-			...this.listRosterSeats().map((seat) => contractorNumber(seat.name) ?? 0),
+		this.nextContractorNumber = Math.max(
+			this.nextContractorNumber,
+			highestContractorNumber(this.listRosterSeats()) + 1,
 		);
-		this.nextContractorNumber = Math.max(this.nextContractorNumber, highestSeen + 1);
 	}
 }
