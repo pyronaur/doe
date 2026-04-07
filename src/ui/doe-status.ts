@@ -1,20 +1,23 @@
 import type { DoeRegistry } from "../state/registry.js";
+import { formatAgentCapacity } from "../agent-capacity.js";
+
+function formatState(state: string): string {
+	if (state === "working") return "work";
+	if (state === "awaiting_input") return "wait";
+	if (state === "completed") return "done";
+	if (state === "error") return "error";
+	return "final";
+}
 
 export function formatDoeStatus(registry: DoeRegistry): string {
 	const roster = registry.listRosterAssignments();
-	const active = roster.length;
-	const label = `${active} Active IC${active === 1 ? "" : "s"}`;
-	if (active === 0) return label;
+	const occupied = roster.length;
+	const label = `${occupied} Occupied IC${occupied === 1 ? "" : "s"}`;
+	if (occupied === 0) return label;
 
-	const summary = [
-		...roster.filter((entry) => entry.agent.state === "working"),
-		...roster.filter((entry) => entry.agent.state !== "working"),
-	]
-		.filter((entry, index, items) => items.findIndex((candidate) => candidate.agent.id === entry.agent.id) === index)
-		.filter((entry) => typeof entry.agent.usage?.usedPercent === "number")
-		.slice(0, 2)
-		.map((entry) => `${entry.seat.name} (${entry.agent.usage!.usedPercent}%)`)
-		.join(", ");
+	const summary = roster
+		.map((entry) => `${entry.seat.name}[${formatState(entry.agent.state)} ${formatAgentCapacity(entry.agent)}]`)
+		.join(" | ");
 
-	return summary ? `${label}: ${summary}` : label;
+	return `${label}: ${summary}`;
 }

@@ -634,6 +634,7 @@ export class DoeRegistry extends EventEmitter {
 		this.updateAgentByThread(threadId, (agent) => ({
 			...agent,
 			usage: deriveUsageSnapshot(usage, turnId),
+			recovered: false,
 		}));
 	}
 

@@ -61,5 +61,34 @@ test("DOE status expands the bottom summary without the compass emoji", () => {
 	attachAgent(registry, { agentId: "agent-3", ic: "Hope", state: "awaiting_input" });
 	registry.markAwaitingInput("agent-3-thread", "waiting");
 
-	assert.equal(formatDoeStatus(registry), "3 Active ICs: Tony (60%), Strange (21%)");
+	assert.equal(formatDoeStatus(registry), "3 Occupied ICs: Tony[work 60%] | Strange[work 21%] | Hope[wait ?]");
+});
+
+test("DOE status keeps all occupied seats visible and hides restored-stale capacity behind a question mark", () => {
+	const registry = new DoeRegistry();
+	attachAgent(registry, { agentId: "agent-1", ic: "Tony", usagePercent: 60 });
+	attachAgent(registry, { agentId: "agent-2", ic: "Peter", usagePercent: 100 });
+	attachAgent(registry, { agentId: "agent-3", ic: "Hope", state: "completed" });
+	registry.markAwaitingInput("agent-2-thread", "waiting");
+	registry.upsertAgent({
+		...registry.findAgent("Peter")!,
+		recovered: true,
+	});
+
+	assert.equal(formatDoeStatus(registry), "3 Occupied ICs: Tony[work 60%] | Peter[wait ?] | Hope[done ?]");
+});
+
+test("DOE status shows restored capacity again after a fresh usage update arrives", () => {
+	const registry = new DoeRegistry();
+	attachAgent(registry, { agentId: "agent-1", ic: "Tony", usagePercent: 100 });
+	registry.upsertAgent({
+		...registry.findAgent("Tony")!,
+		recovered: true,
+	});
+
+	assert.equal(formatDoeStatus(registry), "1 Occupied IC: Tony[work ?]");
+
+	registry.markTokenUsage("agent-1-thread", "turn-2", { tokensUsed: 42, tokenLimit: 100 });
+
+	assert.equal(formatDoeStatus(registry), "1 Occupied IC: Tony[work 42%]");
 });

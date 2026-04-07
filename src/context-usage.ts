@@ -57,6 +57,13 @@ function usageFreshness(
 	return snapshot.updatedAt > compaction.lastCompletedAt ? "post_compaction" : "stale_after_compaction";
 }
 
+export function isUsageSnapshotStale(
+	snapshot: AgentUsageSnapshot | null | undefined,
+	compaction: AgentCompactionState | null | undefined,
+): boolean {
+	return usageFreshness(snapshot, compaction) === "stale_after_compaction";
+}
+
 function normalizeEffectiveUsage(input: ThreadTokenUsage | CurrentContextUsage): CurrentContextUsage | null {
 	if ("tokensUsed" in input && "tokenLimit" in input) {
 		if (!Number.isFinite(input.tokensUsed) || !Number.isFinite(input.tokenLimit) || input.tokenLimit <= 0) return null;

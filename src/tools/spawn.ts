@@ -5,7 +5,6 @@ import { Container, Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
-import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
 import type { AssignableRosterBucket, NotificationMode, DoeRegistry } from "../state/registry.js";
@@ -13,6 +12,7 @@ import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js
 import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.js";
 import { normalizeSpawnSeatIntent } from "./spawn-seat-intent.js";
 import { cancelAgentRun } from "./cancel-agent-run.js";
+import { formatSpawnAgentResult, formatSpawnBatchResults, resolveSpawnRenderBody } from "./spawn-result.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
@@ -143,25 +143,6 @@ function normalizeMultiTaskArgs(args: unknown) {
 	};
 }
 
-function summarizeAgents(agents: Array<any>, maxSnippet = 120): string {
-	return agents
-		.map((agent) => `${`- ${agent.name} [${agent.state}] ${agent.model} ${formatUsageCompact(agent.usage)}${formatCompactionSignal(agent.compaction) ? ` ${formatCompactionSignal(agent.compaction)}` : ""}`} — ${truncateForDisplay(agent.latestFinalOutput ?? agent.latestSnippet, maxSnippet)}`)
-		.join("\n");
-}
-
-function resolveAgentFinalOutput(agent: any): string {
-	const lastAgentMessage = [...(agent?.messages ?? [])]
-		.reverse()
-		.find((message: any) => message?.role === "agent" && typeof message?.text === "string" && message.text.trim().length > 0)?.text;
-	return agent?.latestFinalOutput ?? lastAgentMessage ?? agent?.latestSnippet ?? "Completed";
-}
-
-function formatBatchOutputs(agents: Array<any>): string {
-	return agents
-		.map((agent, index) => [`## ${index + 1}. ${agent.name}`, `ic: ${agent.name}`, `state: ${agent.state}`, `context: ${formatUsageCompact(agent.usage)}`, ...(formatCompactionSignal(agent.compaction) ? [`context_status: ${formatCompactionSignal(agent.compaction)}`] : []), "", resolveAgentFinalOutput(agent)].join("\n"))
-		.join("\n\n---\n\n");
-}
-
 function inferAllowWrite(task: { template?: string | null; allowWrite?: boolean }, templateName: string | null): boolean {
 	if (typeof task.allowWrite === "boolean") return task.allowWrite;
 	return (templateName ?? task.template ?? null) === "implement";
@@ -188,6 +169,7 @@ async function executeSpawnLike(
 		params.batchName ?? (tasks.length > 1 ? `${tasks.length} delegated tasks` : tasks[0]?.name ?? "delegated task");
 	const seededAgentIds = tasks.map(() => randomUUID());
 	const agentIds = [...seededAgentIds];
+	const promptsByAgentId: Record<string, string> = {};
 	if (batchId) {
 		deps.registry.createBatch({
 			id: batchId,
@@ -228,6 +210,7 @@ async function executeSpawnLike(
 			const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
 			const allowWrite = inferAllowWrite(rawTask, templateName);
 			const agentId = seededAgentIds[index - 1]!;
+			promptsByAgentId[agentId] = prompt;
 			const seat = deps.registry.assignSeat({
 				agentId,
 				ic: rawTask.ic ?? null,
@@ -302,14 +285,15 @@ async function executeSpawnLike(
 			? await deps.registry.waitForBatch(batchId, signal)
 			: [await deps.registry.waitForAgent(agentIds[0]!, signal)];
 		const text = batchId
-			? formatBatchOutputs(finalAgents)
-			: [`ic: ${finalAgents[0].name}`, `state: ${finalAgents[0].state}`, `context: ${formatUsageCompact(finalAgents[0].usage)}`, ...(formatCompactionSignal(finalAgents[0].compaction) ? [`context_status: ${formatCompactionSignal(finalAgents[0].compaction)}`] : []), "", resolveAgentFinalOutput(finalAgents[0])].join("\n");
+			? formatSpawnBatchResults(finalAgents, promptsByAgentId)
+			: formatSpawnAgentResult(finalAgents[0], { prompt: promptsByAgentId[finalAgents[0].id] ?? null });
 		return {
 			content: [{ type: "text", text }],
 			details: {
 				batchId,
 				batchName,
 				agents: finalAgents,
+				promptsByAgentId,
 			},
 		};
 	} catch (error) {
@@ -359,11 +343,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			if (options.isPartial && readToolProgressSummary(result)) {
 				return new Container();
 			}
-			const details = (result as any).details ?? {};
-			const agents = Array.isArray(details.agents) ? details.agents : [];
-			const batch = details.batchId ? `batch=${details.batchId}` : "single";
-			const body = agents.length > 0 ? summarizeAgents(agents) : result.content?.[0]?.text ?? "Spawned";
-			return new Text(`${theme.fg("accent", `DoE ${batch}`)}\n${body}`, 0, 0);
+			return new Text(resolveSpawnRenderBody(result as any), 0, 0);
 		},
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const setWorkingMessage = (summary?: string) => {
@@ -392,11 +372,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			if (options.isPartial && readToolProgressSummary(result)) {
 				return new Container();
 			}
-			const details = (result as any).details ?? {};
-			const agents = Array.isArray(details.agents) ? details.agents : [];
-			const batch = details.batchId ? `batch=${details.batchId}` : "single";
-			const body = agents.length > 0 ? summarizeAgents(agents) : result.content?.[0]?.text ?? "Delegated";
-			return new Text(`${theme.fg("accent", `DoE ${batch}`)}\n${body}`, 0, 0);
+			return new Text(resolveSpawnRenderBody(result as any), 0, 0);
 		},
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const setWorkingMessage = (summary?: string) => {
