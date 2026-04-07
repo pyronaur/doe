@@ -1,101 +1,33 @@
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
+import type { CurrentContextUsage } from "../context-usage.ts";
+import {
+	handleAppServerNotification,
+	normalizeCurrentContextUsage,
+} from "./app-server-support.ts";
 import {
 	buildDangerFullAccessSandbox,
 	buildReadOnlySandbox,
-	type AgentActivity,
 	type CodexClientEvent,
 	type ThreadStartOptions,
 	type ThreadSummary,
 	type SandboxMode,
 	type TurnStartOptions,
 	type TurnSteerOptions,
-} from "./client.js";
-import type { CurrentContextUsage, ThreadTokenUsage, TokenUsageBreakdown } from "../context-usage.js";
+} from "./client.ts";
 
 interface PendingRequest {
 	resolve: (value: any) => void;
 	reject: (error: Error) => void;
 }
 
-function activityFromItem(item: any, event: "started" | "completed"): AgentActivity | null {
-	switch (item?.type) {
-		case "reasoning":
-			return "thinking";
-		case "plan":
-			return event === "started" ? "planning" : "thinking";
-		case "commandExecution":
-		case "dynamicToolCall":
-		case "mcpToolCall":
-		case "collabAgentToolCall":
-		case "webSearch":
-		case "imageView":
-			return event === "started" ? "using tools" : "thinking";
-		case "fileChange":
-			return event === "started" ? "editing files" : "thinking";
-		case "agentMessage":
-			return event === "started" ? "writing response" : "thinking";
-		default:
-			return null;
-	}
-}
-
-function normalizeNumber(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function normalizeBreakdown(value: any): TokenUsageBreakdown {
-	return {
-		totalTokens: normalizeNumber(value?.totalTokens),
-		inputTokens: normalizeNumber(value?.inputTokens),
-		cachedInputTokens: normalizeNumber(value?.cachedInputTokens),
-		outputTokens: normalizeNumber(value?.outputTokens),
-		reasoningOutputTokens: normalizeNumber(value?.reasoningOutputTokens),
-	};
-}
-
-function normalizeThreadTokenUsage(value: any): ThreadTokenUsage | null {
-	if (!value || typeof value !== "object") return null;
-	const window = typeof value.modelContextWindow === "number" && Number.isFinite(value.modelContextWindow)
-		? value.modelContextWindow
-		: null;
-	return {
-		total: normalizeBreakdown(value.total),
-		last: normalizeBreakdown(value.last),
-		modelContextWindow: window,
-	};
-}
-
-function normalizeCurrentContextUsage(value: any): CurrentContextUsage | null {
-	if (!value || typeof value !== "object") return null;
-	const tokensUsedCandidates = [
-		value?.tokensUsed,
-		value?.tokens_used,
-		value?.last_token_usage?.total_tokens,
-		value?.lastTokenUsage?.totalTokens,
-		value?.total_token_usage?.total_tokens,
-		value?.totalTokenUsage?.totalTokens,
-	];
-	const tokenLimitCandidates = [
-		value?.tokenLimit,
-		value?.token_limit,
-		value?.model_context_window,
-		value?.modelContextWindow,
-		value?.context_window,
-		value?.contextWindow,
-	];
-	const rawTokensUsed = tokensUsedCandidates.find((entry) => typeof entry === "number" && Number.isFinite(entry));
-	const rawTokenLimit = tokenLimitCandidates.find((entry) => typeof entry === "number" && Number.isFinite(entry));
-	if (typeof rawTokensUsed !== "number" || typeof rawTokenLimit !== "number" || rawTokenLimit <= 0) return null;
-	return {
-		tokensUsed: Math.max(0, Math.min(rawTokensUsed, rawTokenLimit)),
-		tokenLimit: rawTokenLimit,
-	};
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function buildSandboxPolicy(sandbox: SandboxMode, networkAccess = false) {
-	if (sandbox === "read-only") return buildReadOnlySandbox(networkAccess);
+	if (sandbox === "read-only") {return buildReadOnlySandbox(networkAccess);}
 	if (sandbox === "workspace-write") {
 		return {
 			type: "workspaceWrite",
@@ -115,13 +47,15 @@ export class CodexAppServerClient extends EventEmitter {
 	private pending = new Map<number, PendingRequest>();
 	private starting: Promise<void> | null = null;
 	private readonly threadWriteAccess = new Map<string, boolean>();
+	private readonly options: { command?: string; serviceName?: string };
 
-	constructor(private readonly options: { command?: string; serviceName?: string } = {}) {
+	constructor(options: { command?: string; serviceName?: string } = {}) {
 		super();
+		this.options = options;
 	}
 
 	async ensureStarted(): Promise<void> {
-		if (this.proc) return;
+		if (this.proc) {return;}
 		if (this.starting) {
 			await this.starting;
 			return;
@@ -135,10 +69,12 @@ export class CodexAppServerClient extends EventEmitter {
 			});
 			this.proc.stderr.on("data", (data) => {
 				const text = String(data).trim();
-				if (text) console.error(`[doe/codex] ${text}`);
+				if (text) {console.error(`[doe/codex] ${text}`);}
 			});
 			this.proc.on("exit", (code, signal) => {
-				const reason = `Codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"})`;
+				const reason = `Codex app-server exited (code=${code ?? "null"}, signal=${
+					signal ?? "null"
+				})`;
 				this.failPending(reason);
 				this.proc = null;
 				this.reader?.close();
@@ -190,7 +126,16 @@ export class CodexAppServerClient extends EventEmitter {
 		return result;
 	}
 
-	async resumeThread(options: { threadId: string; model?: string; cwd?: string; approvalPolicy?: string; allowWrite?: boolean; sandbox?: SandboxMode }): Promise<any> {
+	async resumeThread(
+		options: {
+			threadId: string;
+			model?: string;
+			cwd?: string;
+			approvalPolicy?: string;
+			allowWrite?: boolean;
+			sandbox?: SandboxMode;
+		},
+	): Promise<any> {
 		await this.ensureStarted();
 		const allowWrite = options.allowWrite ?? this.threadWriteAccess.get(options.threadId) ?? false;
 		const result = await this.request("thread/resume", {
@@ -205,7 +150,9 @@ export class CodexAppServerClient extends EventEmitter {
 		return result;
 	}
 
-	async listThreads(params: { limit?: number; cursor?: string | null; cwd?: string; archived?: boolean } = {}): Promise<any> {
+	async listThreads(
+		params: { limit?: number; cursor?: string | null; cwd?: string; archived?: boolean } = {},
+	): Promise<any> {
 		await this.ensureStarted();
 		return this.request("thread/list", {
 			limit: params.limit ?? 20,
@@ -222,7 +169,10 @@ export class CodexAppServerClient extends EventEmitter {
 		return this.request("thread/read", { threadId, includeTurns });
 	}
 
-	async readContextWindowUsage(threadId: string, turnId?: string | null): Promise<CurrentContextUsage | null> {
+	async readContextWindowUsage(
+		threadId: string,
+		turnId?: string | null,
+	): Promise<CurrentContextUsage | null> {
 		await this.ensureStarted();
 		const result = await this.request("thread/contextWindow/read", {
 			threadId,
@@ -273,17 +223,15 @@ export class CodexAppServerClient extends EventEmitter {
 		if (this.proc) {
 			const proc = this.proc;
 			this.proc = null;
-			try {
+			if (proc.stdin.writable) {
 				proc.stdin.end();
-			} catch {}
-			try {
-				proc.kill();
-			} catch {}
+			}
+			proc.kill();
 		}
 	}
 
 	private send(message: Record<string, unknown>) {
-		if (!this.proc?.stdin.writable) throw new Error("Codex app-server stdin is not writable");
+		if (!this.proc?.stdin.writable) {throw new Error("Codex app-server stdin is not writable");}
 		this.proc.stdin.write(`${JSON.stringify(message)}\n`);
 	}
 
@@ -301,205 +249,92 @@ export class CodexAppServerClient extends EventEmitter {
 	}
 
 	private handleLine(line: string) {
-		if (!line.trim()) return;
-		let message: any;
+		const message = this.parseLine(line);
+		if (!message) {return;}
+		const requestId = typeof message.id === "number" ? message.id : null;
+		const method = typeof message.method === "string" ? message.method : null;
+		const params = isRecord(message.params) ? message.params : {};
+
+		if (requestId !== null && method) {
+			void this.handleServerRequest(requestId, method, params);
+			return;
+		}
+		if (requestId !== null) {
+			this.handleResponse(requestId, message);
+			return;
+		}
+		if (method) {this.handleNotification(method, params);}
+	}
+
+	private parseLine(line: string): Record<string, unknown> | null {
+		if (!line.trim()) {return null;}
+		let message: unknown;
 		try {
 			message = JSON.parse(line);
 		} catch (error) {
-			console.error(`[doe/codex] Failed to parse JSON line: ${line}`);
-			return;
+			console.error("[doe/codex] Failed to parse JSON line:", line, error);
+			return null;
 		}
-
-		if (message.id !== undefined && message.method) {
-			void this.handleServerRequest(message);
-			return;
+		if (!isRecord(message)) {
+			console.error("[doe/codex] Parsed non-object JSON line:", line);
+			return null;
 		}
-
-		if (message.id !== undefined) {
-			const pending = this.pending.get(message.id as number);
-			if (!pending) return;
-			this.pending.delete(message.id as number);
-			if (message.error) {
-				pending.reject(new Error(message.error?.message ?? `Request failed: ${JSON.stringify(message.error)}`));
-			} else {
-				pending.resolve(message.result);
-			}
-			return;
-		}
-
-		if (typeof message.method === "string") {
-			this.handleNotification(message.method, message.params ?? {});
-		}
+		return message;
 	}
 
-	private async handleServerRequest(message: any) {
-		const respond = (result: unknown) => this.send({ id: message.id, result });
+	private handleResponse(requestId: number, message: Record<string, unknown>) {
+		const pending = this.pending.get(requestId);
+		if (!pending) {return;}
+		this.pending.delete(requestId);
+		if (isRecord(message.error)) {
+			const errorMessage = typeof message.error.message === "string"
+				? message.error.message
+				: `Request failed: ${JSON.stringify(message.error)}`;
+			pending.reject(new Error(errorMessage));
+			return;
+		}
+		pending.resolve(message.result);
+	}
+
+	private async handleServerRequest(
+		id: number,
+		method: string,
+		params: Record<string, unknown>,
+	) {
+		const respond = (result: unknown) => this.send({ id, result });
 		const respondError = (code: number, errorMessage: string) =>
-			this.send({ id: message.id, error: { code, message: errorMessage } });
-		const allowWrite = this.threadWriteAccess.get(message.params?.threadId) ?? false;
+			this.send({ id, error: { code, message: errorMessage } });
+		const threadId = typeof params.threadId === "string" ? params.threadId : null;
+		const allowWrite = threadId ? this.threadWriteAccess.get(threadId) ?? false : false;
 
-		switch (message.method) {
-			case "item/commandExecution/requestApproval":
-			case "execCommandApproval":
-				respond({ decision: allowWrite ? "accept" : "decline" });
-				return;
-			case "item/fileChange/requestApproval":
-			case "applyPatchApproval":
-				respond({ decision: allowWrite ? "accept" : "decline" });
-				return;
-			case "item/permissions/requestApproval":
-				respond({ permissions: {}, scope: "session" });
-				return;
-			case "item/tool/requestUserInput":
-				respond({ answers: {} });
-				return;
-			case "item/tool/call":
-				respond({ contentItems: [], success: false });
-				return;
-			default:
-				respondError(-32601, `Unsupported server request: ${message.method}`);
+		if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") {
+			respond({ decision: allowWrite ? "accept" : "decline" });
+			return;
 		}
+		if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") {
+			respond({ decision: allowWrite ? "accept" : "decline" });
+			return;
+		}
+		if (method === "item/permissions/requestApproval") {
+			respond({ permissions: {}, scope: "session" });
+			return;
+		}
+		if (method === "item/tool/requestUserInput") {
+			respond({ answers: {} });
+			return;
+		}
+		if (method === "item/tool/call") {
+			respond({ contentItems: [], success: false });
+			return;
+		}
+		respondError(-32601, `Unsupported server request: ${method}`);
 	}
 
-	private handleNotification(method: string, params: any) {
-		switch (method) {
-			case "thread/started":
-				if (params.thread?.id && !this.threadWriteAccess.has(params.thread.id)) {
-					this.threadWriteAccess.set(
-						params.thread.id,
-						params.thread?.sandbox?.type === "workspaceWrite" || params.thread?.sandbox?.type === "dangerFullAccess",
-					);
-				}
-				this.emit("event", { type: "thread-started", thread: params.thread } satisfies CodexClientEvent);
-				return;
-			case "thread/status/changed":
-				this.emit("event", {
-					type: "thread-status",
-					threadId: params.threadId,
-					status: params.status,
-				} satisfies CodexClientEvent);
-				return;
-			case "thread/tokenUsage/updated": {
-				const usage = normalizeCurrentContextUsage(params.usage ?? params.tokenUsage);
-				if (!usage) {
-					const tokenUsage = normalizeThreadTokenUsage(params.tokenUsage);
-					if (!tokenUsage) return;
-					const fallback = normalizeCurrentContextUsage({
-						last_token_usage: { total_tokens: tokenUsage.last.totalTokens },
-						total_token_usage: { total_tokens: tokenUsage.total.totalTokens },
-						model_context_window: tokenUsage.modelContextWindow,
-					});
-					if (!fallback) return;
-					this.emit("event", {
-						type: "thread-token-usage",
-						threadId: params.threadId,
-						turnId: typeof params.turnId === "string" ? params.turnId : null,
-						usage: fallback,
-					} satisfies CodexClientEvent);
-					return;
-				}
-				this.emit("event", {
-					type: "thread-token-usage",
-					threadId: params.threadId,
-					turnId: typeof params.turnId === "string" ? params.turnId : null,
-					usage,
-				} satisfies CodexClientEvent);
-				return;
-			}
-			case "thread/compacted":
-				this.emit("event", {
-					type: "thread-compaction-completed",
-					threadId: params.threadId,
-					turnId: typeof params.turnId === "string" ? params.turnId : null,
-					itemId: null,
-					source: "thread/compacted",
-				} satisfies CodexClientEvent);
-				return;
-			case "turn/started":
-				this.emit("event", {
-					type: "turn-started",
-					threadId: params.threadId,
-					turnId: params.turn?.id,
-				} satisfies CodexClientEvent);
-				return;
-			case "item/started": {
-				if (params.item?.type === "contextCompaction") {
-					this.emit("event", {
-						type: "thread-compaction-started",
-						threadId: params.threadId,
-						turnId: typeof params.turnId === "string" ? params.turnId : null,
-						itemId: typeof params.item?.id === "string" ? params.item.id : null,
-					} satisfies CodexClientEvent);
-					return;
-				}
-				const activity = activityFromItem(params.item, "started");
-				if (activity) {
-					this.emit("event", {
-						type: "agent-activity",
-						threadId: params.threadId,
-						activity,
-					} satisfies CodexClientEvent);
-				}
-				return;
-			}
-			case "turn/completed":
-				this.emit("event", {
-					type: "turn-completed",
-					threadId: params.threadId,
-					turnId: params.turn?.id,
-					status: params.turn?.status,
-					error: params.turn?.error?.message ?? null,
-				} satisfies CodexClientEvent);
-				return;
-			case "item/agentMessage/delta":
-				this.emit("event", {
-					type: "agent-message-delta",
-					threadId: params.threadId,
-					turnId: params.turnId,
-					itemId: params.itemId,
-					delta: params.delta ?? "",
-				} satisfies CodexClientEvent);
-				return;
-			case "item/completed": {
-				if (params.item?.type === "contextCompaction") {
-					this.emit("event", {
-						type: "thread-compaction-completed",
-						threadId: params.threadId,
-						turnId: typeof params.turnId === "string" ? params.turnId : null,
-						itemId: typeof params.item?.id === "string" ? params.item.id : null,
-						source: "contextCompaction",
-					} satisfies CodexClientEvent);
-					return;
-				}
-				const activity = activityFromItem(params.item, "completed");
-				if (activity) {
-					this.emit("event", {
-						type: "agent-activity",
-						threadId: params.threadId,
-						activity,
-					} satisfies CodexClientEvent);
-				}
-				if (params.item?.type === "agentMessage") {
-					this.emit("event", {
-						type: "agent-message-complete",
-						threadId: params.threadId,
-						turnId: params.turnId,
-						itemId: params.item.id,
-						text: params.item.text ?? "",
-					} satisfies CodexClientEvent);
-				}
-				return;
-			}
-			case "error":
-				this.emit("event", {
-					type: "error",
-					threadId: params.threadId,
-					message: params.error?.message ?? JSON.stringify(params),
-				} satisfies CodexClientEvent);
-				return;
-			default:
-				return;
-		}
+	private handleNotification(method: string, params: Record<string, unknown>) {
+		handleAppServerNotification(method, params, {
+			emit: (event) => this.emit("event", event),
+			threadWriteAccess: this.threadWriteAccess,
+		});
 	}
 
 	private failPending(message: string) {
