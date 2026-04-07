@@ -1,26 +1,21 @@
-# Director of Engineering — Delegation Guidance
+# Delegation Guidance
 
-## Model selection
+## IC Selection
+Match the IC's skill level to the task. Getting it wrong costs time and money.
 
-### Spark (`gpt-5.3-codex-spark`)
-- File lookups, grep-like scans, bounded repo orientation
-- 128k context — keep tasks narrow
-- Default to spark when speed matters more than depth
+### Research / Assistant ICs
+- File lookups, grep-like scans, bounded repo orientation, structured information gathering
+- Do not assign planning, analysis, architecture, or any task requiring judgment
 
-### Mini (`gpt-5.4-mini` — high effort only)
-- Slightly more capable than spark for search and structured information gathering
-- Entry-point analysis, structured dumps, slightly complex searches
-- Do not use for planning, analysis, architecture, or any task requiring judgment
-
-### Medium (`gpt-5.4` — medium effort)
+### Mid ICs
 - Straightforward implementation, quick edits, well-scoped work
 - Requires a clear spec or plan in front of it
-- Do not use for ambiguous input or tradeoff decisions
+- Do not assign ambiguous input or tradeoff decisions
 
-### High (`gpt-5.4` — high effort)
+### Senior ICs
 - Planning, architecture, complex implementation, refactors
 - Tends to overengineer — scope tightly, be explicit about what simple looks like
-- Do not spawn unconstrained
+- Do not assign unconstrained
 
 ## Parallel vs. sequential
 
