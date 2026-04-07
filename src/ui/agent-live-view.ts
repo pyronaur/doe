@@ -3,8 +3,9 @@ import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi
 import { extractThreadTranscript, truncateForDisplay } from "../codex/client.js";
 import { formatUsageBreakdown } from "../context-usage.js";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import type { AgentRecord, DoeRegistry } from "../state/registry.js";
-import { ROSTER_BUCKET_LABELS, ROSTER_BUCKET_ORDER } from "../state/registry.js";
+import type { DoeRegistry } from "../state/registry.js";
+import { SEAT_ROLE_LABELS, SEAT_ROLES } from "../config.js";
+import type { AgentRecord } from "../types.js";
 import { formatAgentProgressLine } from "./agent-progress.js";
 
 type ViewMode = "list" | "detail";
@@ -284,13 +285,13 @@ class AgentLiveViewComponent {
 		const pageSize = listViewportSize();
 		const pageStart = Math.max(0, Math.min(selectedIndex, Math.max(0, agents.length - pageSize)));
 		const page = agents.slice(pageStart, pageStart + pageSize);
-		const summaries = this.registry.getRosterBucketSummaries();
+		const summaries = this.registry.getRosterRoleSummaries();
 
 		body.push(this.theme.fg("accent", ` Occupied ICs ${agents.length}`));
-		for (const bucket of ROSTER_BUCKET_ORDER) {
-			const summary = summaries.find((entry) => entry.bucket === bucket);
+		for (const role of SEAT_ROLES) {
+			const summary = summaries.find((entry) => entry.role === role);
 			if (!summary || summary.activeCount === 0) continue;
-			body.push(this.theme.fg("muted", ` ${ROSTER_BUCKET_LABELS[bucket]}: ${summary.names.join(", ")}`));
+			body.push(this.theme.fg("muted", ` ${SEAT_ROLE_LABELS[role]}: ${summary.names.join(", ")}`));
 		}
 		body.push(this.theme.fg("muted", " Up/Down move | Enter detail | Esc close"));
 		body.push("");

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DoeRegistry } from "../src/state/registry.ts";
-import type { AgentRecord, PersistedRegistrySnapshot } from "../src/state/registry.ts";
+import type { AgentRecord, PersistedRegistrySnapshot } from "../src/types.ts";
 
 function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 	return {
@@ -24,18 +24,18 @@ function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 	};
 }
 
-test("registry seeds fixed named roster in bucket order", () => {
+test("registry seeds fixed IC roster in role order", () => {
 	const registry = new DoeRegistry();
 	assert.deepEqual(
-		registry.listRosterSeats().map((seat) => `${seat.bucket}:${seat.name}`),
+		registry.listRosterSeats().map((seat) => `${seat.role}:${seat.name}`),
 		[
 			"senior:Tony",
 			"senior:Bruce",
 			"senior:Strange",
 			"mid:Peter",
 			"mid:Sam",
+			"mid:Scott",
 			"research:Hope",
-			"research:Scott",
 			"research:Jane",
 			"research:Pepper",
 		],
@@ -44,20 +44,23 @@ test("registry seeds fixed named roster in bucket order", () => {
 
 test("contractor numbering is stable across serialize and restore", () => {
 	const registry = new DoeRegistry();
-	const peter = registry.assignSeat({ agentId: "agent-1", bucket: "mid" });
-	const sam = registry.assignSeat({ agentId: "agent-2", bucket: "mid" });
-	const contractor1 = registry.assignSeat({ agentId: "agent-3", bucket: "mid" });
+	const peter = registry.assignSeat({ agentId: "agent-1", role: "mid" });
+	const sam = registry.assignSeat({ agentId: "agent-2", role: "mid" });
+	const scott = registry.assignSeat({ agentId: "agent-3", role: "mid" });
+	const contractor1 = registry.assignSeat({ agentId: "agent-4", role: "mid" });
 	assert.equal(peter.name, "Peter");
 	assert.equal(sam.name, "Sam");
+	assert.equal(scott.name, "Scott");
 	assert.equal(contractor1.name, "contractor-1");
 
-	registry.upsertAgent(createAgent({ id: "agent-1", name: peter.name, seatName: peter.name, seatBucket: peter.bucket, seatKind: peter.kind }));
-	registry.upsertAgent(createAgent({ id: "agent-2", name: sam.name, seatName: sam.name, seatBucket: sam.bucket, seatKind: sam.kind }));
-	registry.upsertAgent(createAgent({ id: "agent-3", name: contractor1.name, seatName: contractor1.name, seatBucket: contractor1.bucket, seatKind: contractor1.kind }));
+	registry.upsertAgent(createAgent({ id: "agent-1", name: peter.name, seatName: peter.name, seatRole: peter.role }));
+	registry.upsertAgent(createAgent({ id: "agent-2", name: sam.name, seatName: sam.name, seatRole: sam.role }));
+	registry.upsertAgent(createAgent({ id: "agent-3", name: scott.name, seatName: scott.name, seatRole: scott.role }));
+	registry.upsertAgent(createAgent({ id: "agent-4", name: contractor1.name, seatName: contractor1.name, seatRole: contractor1.role }));
 
 	const restored = new DoeRegistry();
 	restored.restore(registry.serialize());
-	const contractor2 = restored.assignSeat({ agentId: "agent-4", bucket: "mid" });
+	const contractor2 = restored.assignSeat({ agentId: "agent-5", role: "mid" });
 	assert.equal(contractor2.name, "contractor-2");
 });
 
@@ -70,8 +73,7 @@ test("completed named seats remain attached until finalize", () => {
 			name: seat.name,
 			threadId: "thread-1",
 			seatName: seat.name,
-			seatBucket: seat.bucket,
-			seatKind: seat.kind,
+			seatRole: seat.role,
 		}),
 	);
 
@@ -113,10 +115,9 @@ test("finalize releases completed seats but rejects active running work", () => 
 			name: seat.name,
 			threadId: "thread-1",
 			seatName: seat.name,
-			seatBucket: seat.bucket,
-			seatKind: seat.kind,
+			seatRole: seat.role,
 		}),
-	);
+		);
 
 	assert.throws(() => registry.finalizeSeat("Hope"), /still working/);
 	registry.markCompleted("thread-1", "Need DOE input");
@@ -136,8 +137,7 @@ test("fresh assignment on the same seat requires finalize after completion", () 
 			name: firstSeat.name,
 			threadId: "thread-1",
 			seatName: firstSeat.name,
-			seatBucket: firstSeat.bucket,
-			seatKind: firstSeat.kind,
+			seatRole: firstSeat.role,
 		}),
 	);
 	registry.markCompleted("thread-1", "done");
@@ -154,8 +154,7 @@ test("fresh assignment on the same seat requires finalize after completion", () 
 			name: secondSeat.name,
 			threadId: "thread-2",
 			seatName: secondSeat.name,
-			seatBucket: secondSeat.bucket,
-			seatKind: secondSeat.kind,
+			seatRole: secondSeat.role,
 		}),
 	);
 
@@ -174,8 +173,7 @@ test("restore keeps completed seat attachments name-first without marking them r
 			name: seat.name,
 			threadId: "thread-1",
 			seatName: seat.name,
-			seatBucket: seat.bucket,
-			seatKind: seat.kind,
+			seatRole: seat.role,
 		}),
 	);
 	registry.markCompleted("thread-1", "done");
@@ -219,8 +217,7 @@ test("cancelAgent releases the seat and ignores late completion for the interrup
 			threadId: "thread-1",
 			activeTurnId: "turn-1",
 			seatName: seat.name,
-			seatBucket: seat.bucket,
-			seatKind: seat.kind,
+			seatRole: seat.role,
 		}),
 	);
 

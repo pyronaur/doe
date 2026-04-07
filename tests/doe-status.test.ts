@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DoeRegistry } from "../src/state/registry.ts";
-import type { AgentRecord } from "../src/state/registry.ts";
+import type { AgentRecord } from "../src/types.ts";
 import { deriveUsageSnapshot } from "../src/context-usage.ts";
 import { formatDoeStatus } from "../src/ui/doe-status.ts";
 
@@ -45,8 +45,7 @@ function attachAgent(
 			threadId: `${input.agentId}-thread`,
 			state: input.state ?? "working",
 			seatName: seat.name,
-			seatBucket: seat.bucket,
-			seatKind: seat.kind,
+			seatRole: seat.role,
 			usage: typeof input.usagePercent === "number"
 				? deriveUsageSnapshot({ tokensUsed: input.usagePercent, tokenLimit: 100 }, null, 1)
 				: null,

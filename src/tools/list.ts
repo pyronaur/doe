@@ -2,8 +2,9 @@ import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { DoeRegistry, RosterAssignmentRecord } from "../state/registry.js";
-import { ROSTER_BUCKET_ORDER, ROSTER_BUCKET_LABELS } from "../state/registry.js";
+import type { DoeRegistry } from "../state/registry.js";
+import { SEAT_ROLE_LABELS, SEAT_ROLES } from "../config.js";
+import type { RosterAssignmentRecord } from "../types.js";
 import { truncateForDisplay } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 
@@ -84,7 +85,7 @@ export function registerListTool(pi: ExtensionAPI, deps: { registry: DoeRegistry
 				includeHistory: params.includeHistory ?? false,
 				limit: params.limit,
 			});
-			const summaries = deps.registry.getRosterBucketSummaries({
+			const summaries = deps.registry.getRosterRoleSummaries({
 				includeAwaitingInput: params.includeAwaitingInput ?? true,
 				includeHistory: params.includeHistory ?? false,
 			});
@@ -92,16 +93,16 @@ export function registerListTool(pi: ExtensionAPI, deps: { registry: DoeRegistry
 			const includeIds = params.includeIds ?? false;
 			const lines: string[] = [
 				`${countLabel}: ${roster.length}`,
-				...summaries.map((entry) => `${ROSTER_BUCKET_LABELS[entry.bucket]}: ${entry.activeCount}${entry.names.length ? ` (${entry.names.join(", ")})` : ""}`),
+				...summaries.map((entry) => `${SEAT_ROLE_LABELS[entry.role]}: ${entry.activeCount}${entry.names.length ? ` (${entry.names.join(", ")})` : ""}`),
 			];
 
 			if (roster.length === 0) {
 				lines.push("", "No matching ICs.");
 			} else {
-				for (const bucket of ROSTER_BUCKET_ORDER) {
-					const entries = roster.filter((entry) => entry.seat.bucket === bucket);
+				for (const role of SEAT_ROLES) {
+					const entries = roster.filter((entry) => entry.seat.role === role);
 					if (entries.length === 0) continue;
-					lines.push("", `${ROSTER_BUCKET_LABELS[bucket]}:`);
+					lines.push("", `${SEAT_ROLE_LABELS[role]}:`);
 					for (const entry of entries) {
 						lines.push(formatRosterEntry(entry, includeIds));
 					}

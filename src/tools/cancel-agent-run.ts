@@ -1,5 +1,6 @@
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import type { AgentRecord, DoeRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../state/registry.js";
+import type { AgentRecord } from "../types.js";
 
 export async function cancelAgentRun(input: {
 	agent: AgentRecord;

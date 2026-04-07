@@ -7,7 +7,9 @@ import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
-import type { AssignableRosterBucket, NotificationMode, DoeRegistry } from "../state/registry.js";
+import { IC_ROLES } from "../config.js";
+import type { DoeRegistry } from "../state/registry.js";
+import type { ICRole, NotificationMode } from "../types.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.js";
 import { normalizeSpawnSeatIntent } from "./spawn-seat-intent.js";
@@ -16,12 +18,12 @@ import { formatSpawnAgentResult, formatSpawnBatchResults, resolveSpawnRenderBody
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
-const BucketSchema = StringEnum(["senior", "mid", "research"] as const);
+const RoleSchema = StringEnum(IC_ROLES);
 
 const TaskSchema = Type.Object({
 	name: Type.Optional(Type.String()),
 	ic: Type.Optional(Type.String()),
-	bucket: Type.Optional(BucketSchema),
+	role: Type.Optional(RoleSchema),
 	prompt: Type.String(),
 	cwd: Type.Optional(Type.String()),
 	model: Type.Optional(Type.String()),
@@ -37,7 +39,7 @@ const SpawnParametersSchema = Type.Object({
 	tasks: Type.Optional(Type.Array(TaskSchema, { minItems: 1, maxItems: 8 })),
 	name: Type.Optional(Type.String()),
 	ic: Type.Optional(Type.String()),
-	bucket: Type.Optional(BucketSchema),
+	role: Type.Optional(RoleSchema),
 	prompt: Type.Optional(Type.String()),
 	cwd: Type.Optional(Type.String()),
 	model: Type.Optional(Type.String()),
@@ -116,7 +118,7 @@ function buildTasks(params: any): any[] {
 		{
 			name: params.name ?? inferName(params.prompt),
 			ic: params.ic,
-			bucket: params.bucket,
+			role: params.role,
 			prompt: params.prompt,
 			cwd: params.cwd,
 			model: params.model,
@@ -214,7 +216,7 @@ async function executeSpawnLike(
 			const seat = deps.registry.assignSeat({
 				agentId,
 				ic: rawTask.ic ?? null,
-				bucket: (rawTask.bucket ?? "mid") as AssignableRosterBucket,
+				role: (rawTask.role ?? "mid") as ICRole,
 			});
 			const now = Date.now();
 
@@ -244,8 +246,7 @@ async function executeSpawnLike(
 				completionNotified: false,
 				recovered: false,
 				seatName: seat.name,
-				seatBucket: seat.bucket,
-				seatKind: seat.kind,
+				seatRole: seat.role,
 				finishNote: null,
 				reuseSummary: null,
 				messages: [],
@@ -325,9 +326,9 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			"Use for new work only. Do not use when an existing thread has relevant context — use codex_resume instead.",
 			"Use name for the task label. Use ic for seat targeting.",
 			"Fresh spawn on the same seat starts a new thread and does not preserve thread memory. Use codex_resume when the same thread context should continue.",
-			"Pass ic to target a specific named seat, or bucket to auto-allocate the next free seat in senior|mid|research.",
+			"Pass ic to target a specific named seat, or role to auto-allocate the next free IC in senior|mid|research.",
 			"Compatibility shim: if name exactly matches an existing seat and ic is omitted, DOE treats that name as the intended seat.",
-			"Each new task gets a fresh assignment. If the bucket is full, DOE allocates contractor-N overflow seats.",
+			"Each new task gets a fresh assignment. If a role is full, DOE allocates contractor-N overflow seats.",
 			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
 			"Workers are read-only by default. Set allowWrite=true per task, or use template=implement which enables write automatically.",
 			"Waits for workers to complete and returns each worker's full final answer in content. Use that returned content directly as the worker result.",

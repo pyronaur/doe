@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DoeRegistry } from "../src/state/registry.ts";
-import type { AgentRecord } from "../src/state/registry.ts";
+import type { AgentRecord } from "../src/types.ts";
 import { cancelAgentRun } from "../src/tools/cancel-agent-run.ts";
 
 function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
@@ -36,8 +36,7 @@ test("cancelAgentRun interrupts, unsubscribes, and releases the seat by default"
 			threadId: "thread-1",
 			activeTurnId: "turn-1",
 			seatName: seat.name,
-			seatBucket: seat.bucket,
-			seatKind: seat.kind,
+			seatRole: seat.role,
 		}),
 	);
 

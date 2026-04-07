@@ -1,24 +1,36 @@
-import type { AssignableRosterBucket } from "./state/registry.js";
+import type { ReasoningEffort } from "./codex/client.js";
+import type { ICRole, SeatRole } from "./types.js";
 
 export interface ICDefaults {
 	model: string;
-	effort?: "low" | "medium" | "high" | "xhigh";
+	effort?: ReasoningEffort;
 	allowWrite?: boolean;
 }
 
-export interface IC {
+export interface ICConfig {
+	slug: string;
 	name: string;
-	role: AssignableRosterBucket;
+	role: ICRole;
 	defaults: ICDefaults;
 }
 
+export const IC_ROLES = ["senior", "mid", "research"] as const satisfies readonly ICRole[];
+export const SEAT_ROLES = [...IC_ROLES, "contractor"] as const satisfies readonly SeatRole[];
+
+export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {
+	senior: "Senior Engineers",
+	mid: "Mid-level Engineers",
+	research: "Researchers/Assistants",
+	contractor: "Contractors",
+};
+
 /**
  * Built-in IC configurations.
- * Keyed by name slug. Roles: senior (GPT 5.4 high), mid (GPT 5.4 medium),
- * research (GPT 5.3 spark / GPT 5.4 mini).
+ * Ordered for roster display and first-available assignment preference.
  */
-export const ICs: Record<string, IC> = {
-	tony: {
+export const IC_CONFIG = [
+	{
+		slug: "tony",
 		name: "Tony",
 		role: "senior",
 		defaults: {
@@ -27,7 +39,8 @@ export const ICs: Record<string, IC> = {
 			allowWrite: true,
 		},
 	},
-	bruce: {
+	{
+		slug: "bruce",
 		name: "Bruce",
 		role: "senior",
 		defaults: {
@@ -36,7 +49,8 @@ export const ICs: Record<string, IC> = {
 			allowWrite: true,
 		},
 	},
-	strange: {
+	{
+		slug: "strange",
 		name: "Strange",
 		role: "senior",
 		defaults: {
@@ -45,7 +59,8 @@ export const ICs: Record<string, IC> = {
 			allowWrite: true,
 		},
 	},
-	peter: {
+	{
+		slug: "peter",
 		name: "Peter",
 		role: "mid",
 		defaults: {
@@ -54,7 +69,8 @@ export const ICs: Record<string, IC> = {
 			allowWrite: true,
 		},
 	},
-	sam: {
+	{
+		slug: "sam",
 		name: "Sam",
 		role: "mid",
 		defaults: {
@@ -63,7 +79,8 @@ export const ICs: Record<string, IC> = {
 			allowWrite: true,
 		},
 	},
-	scott: {
+	{
+		slug: "scott",
 		name: "Scott",
 		role: "mid",
 		defaults: {
@@ -72,7 +89,8 @@ export const ICs: Record<string, IC> = {
 			allowWrite: true,
 		},
 	},
-	hope: {
+	{
+		slug: "hope",
 		name: "Hope",
 		role: "research",
 		defaults: {
@@ -81,7 +99,8 @@ export const ICs: Record<string, IC> = {
 			allowWrite: false,
 		},
 	},
-	jane: {
+	{
+		slug: "jane",
 		name: "Jane",
 		role: "research",
 		defaults: {
@@ -90,7 +109,8 @@ export const ICs: Record<string, IC> = {
 			allowWrite: false,
 		},
 	},
-	pepper: {
+	{
+		slug: "pepper",
 		name: "Pepper",
 		role: "research",
 		defaults: {
@@ -99,4 +119,16 @@ export const ICs: Record<string, IC> = {
 			allowWrite: false,
 		},
 	},
-} as const;
+] as const satisfies readonly ICConfig[];
+
+function normalizeICName(name: string): string {
+	return name.trim().toLowerCase();
+}
+
+export const IC_CONFIG_BY_SLUG = new Map(IC_CONFIG.map((ic) => [ic.slug, ic]));
+export const IC_CONFIG_BY_NAME = new Map(IC_CONFIG.map((ic) => [normalizeICName(ic.name), ic]));
+export const IC_DISPLAY_ORDER = new Map(IC_CONFIG.map((ic, index) => [normalizeICName(ic.name), index]));
+
+export function findICConfigByName(name: string): ICConfig | undefined {
+	return IC_CONFIG_BY_NAME.get(normalizeICName(name));
+}

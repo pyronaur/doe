@@ -6,137 +6,34 @@ import {
 	type AgentCompactionState,
 	type AgentUsageSnapshot,
 } from "../context-usage.js";
-
-export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_input" | "finalized";
-export type NotificationMode = "wait_all" | "notify_each";
-export type ReturnMode = "wait";
-export type RosterBucket = "senior" | "mid" | "research" | "contractor";
-export type AssignableRosterBucket = Exclude<RosterBucket, "contractor">;
-export type SeatKind = "named" | "contractor";
-
-export interface AgentMessageRecord {
-	turnId: string;
-	itemId: string | null;
-	role: "user" | "agent";
-	text: string;
-	streaming: boolean;
-	createdAt: number;
-	completedAt?: number | null;
-}
-
-export interface AgentRecord {
-	id: string;
-	name: string;
-	cwd: string;
-	model: string;
-	effort?: string;
-	template?: string | null;
-	allowWrite?: boolean;
-	threadId?: string | null;
-	activeTurnId?: string | null;
-	state: AgentLifecycleState;
-	activityLabel?: AgentActivity | null;
-	latestSnippet: string;
-	latestFinalOutput?: string | null;
-	lastError?: string | null;
-	usage?: AgentUsageSnapshot | null;
-	compaction?: AgentCompactionState | null;
-	startedAt: number;
-	runStartedAt?: number | null;
-	completedAt?: number | null;
-	interruptedTurnId?: string | null;
-	parentBatchId?: string | null;
-	notificationMode: NotificationMode;
-	returnMode: ReturnMode;
-	completionNotified?: boolean;
-	recovered?: boolean;
-	seatName?: string | null;
-	seatBucket?: RosterBucket | null;
-	seatKind?: SeatKind | null;
-	finishNote?: string | null;
-	reuseSummary?: string | null;
-	messages: AgentMessageRecord[];
-	historyHydratedAt?: number | null;
-}
-
-export interface BatchRecord {
-	id: string;
-	name: string;
-	agentIds: string[];
-	notificationMode: NotificationMode;
-	returnMode: ReturnMode;
-	startedAt: number;
-	completedAt?: number | null;
-	notified?: boolean;
-}
-
-export interface RosterSeatRecord {
-	name: string;
-	bucket: RosterBucket;
-	kind: SeatKind;
-	order: number;
-	activeAgentId?: string | null;
-	lastFinishedAgentId?: string | null;
-	lastThreadId?: string | null;
-	lastFinishNote?: string | null;
-	lastReuseSummary?: string | null;
-}
-
-export interface PersistedRosterSnapshot {
-	seats: RosterSeatRecord[];
-	nextContractorNumber: number;
-}
-
-export interface PersistedRegistrySnapshot {
-	version: number;
-	savedAt: number;
-	agents: AgentRecord[];
-	batches: BatchRecord[];
-	roster?: PersistedRosterSnapshot | null;
-}
-
-export interface RosterAssignmentRecord {
-	seat: RosterSeatRecord;
-	agent: AgentRecord;
-	source: "active" | "history";
-}
-
-export interface RosterBucketSummary {
-	bucket: RosterBucket;
-	label: string;
-	activeCount: number;
-	names: string[];
-}
-
-export type RegistryEvent =
-	| { type: "change" }
-	| { type: "agent-updated"; agent: AgentRecord }
-	| { type: "agent-terminal"; agent: AgentRecord }
-	| { type: "batch-completed"; batch: BatchRecord; agents: AgentRecord[] };
-
-export const ROSTER_BUCKET_ORDER = ["senior", "mid", "research", "contractor"] as const;
-export const ROSTER_BUCKET_LABELS: Record<RosterBucket, string> = {
-	senior: "Senior Engineers",
-	mid: "Mid-level Engineers",
-	research: "Researchers/Assistants",
-	contractor: "Contractors",
-};
+import {
+	IC_CONFIG,
+	IC_DISPLAY_ORDER,
+	SEAT_ROLE_LABELS,
+	SEAT_ROLES,
+	findICConfigByName,
+} from "../config.js";
+import type {
+	AgentLifecycleState,
+	AgentMessageRecord,
+	AgentRecord,
+	BatchRecord,
+	ICRole,
+	NotificationMode,
+	PersistedRegistrySnapshot,
+	PersistedRosterSnapshot,
+	RegistryEvent,
+	ReturnMode,
+	RosterAssignmentRecord,
+	RosterRoleSummary,
+	RosterSeatRecord,
+	SeatRole,
+} from "../types.js";
 
 const TERMINAL_STATES = new Set<AgentLifecycleState>(["completed", "error", "awaiting_input", "finalized"]);
 const ATTACHED_STATES = new Set<AgentLifecycleState>(["working", "awaiting_input", "completed"]);
 const RECOVERABLE_STATES = new Set<AgentLifecycleState>(["working", "awaiting_input"]);
 const CONTRACTOR_NAME = /^contractor-(\d+)$/i;
-const FIXED_SEATS: Array<{ name: string; bucket: AssignableRosterBucket; order: number }> = [
-	{ name: "Tony", bucket: "senior", order: 1 },
-	{ name: "Bruce", bucket: "senior", order: 2 },
-	{ name: "Strange", bucket: "senior", order: 3 },
-	{ name: "Peter", bucket: "mid", order: 1 },
-	{ name: "Sam", bucket: "mid", order: 2 },
-	{ name: "Hope", bucket: "research", order: 1 },
-	{ name: "Scott", bucket: "research", order: 2 },
-	{ name: "Jane", bucket: "research", order: 3 },
-	{ name: "Pepper", bucket: "research", order: 4 },
-];
 
 function normalizeErrorText(text: string): string {
 	const trimmed = text.trim();
@@ -162,12 +59,10 @@ function contractorNumber(name: string): number | null {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function defaultSeatRecord(input: { name: string; bucket: RosterBucket; kind: SeatKind; order: number }): RosterSeatRecord {
+function defaultSeatRecord(input: { name: string; role: SeatRole }): RosterSeatRecord {
 	return {
 		name: input.name,
-		bucket: input.bucket,
-		kind: input.kind,
-		order: input.order,
+		role: input.role,
 		activeAgentId: null,
 		lastFinishedAgentId: null,
 		lastThreadId: null,
@@ -188,9 +83,18 @@ function cloneSeat(seat: RosterSeatRecord): RosterSeatRecord {
 }
 
 function seatSort(a: RosterSeatRecord, b: RosterSeatRecord): number {
-	const bucketDiff = ROSTER_BUCKET_ORDER.indexOf(a.bucket) - ROSTER_BUCKET_ORDER.indexOf(b.bucket);
-	if (bucketDiff !== 0) return bucketDiff;
-	if (a.order !== b.order) return a.order - b.order;
+	const roleDiff = SEAT_ROLES.indexOf(a.role) - SEAT_ROLES.indexOf(b.role);
+	if (roleDiff !== 0) return roleDiff;
+	const displayOrderA = IC_DISPLAY_ORDER.get(normalizeSeatName(a.name));
+	const displayOrderB = IC_DISPLAY_ORDER.get(normalizeSeatName(b.name));
+	if (typeof displayOrderA === "number" && typeof displayOrderB === "number") {
+		return displayOrderA - displayOrderB;
+	}
+	const contractorA = contractorNumber(a.name);
+	const contractorB = contractorNumber(b.name);
+	if (contractorA !== null && contractorB !== null && contractorA !== contractorB) {
+		return contractorA - contractorB;
+	}
 	return a.name.localeCompare(b.name);
 }
 
@@ -234,8 +138,7 @@ function cloneAgent(agent: AgentRecord): AgentRecord {
 		compaction: agent.compaction ? { ...agent.compaction } : null,
 		historyHydratedAt: agent.historyHydratedAt ?? null,
 		seatName: agent.seatName ?? null,
-		seatBucket: agent.seatBucket ?? null,
-		seatKind: agent.seatKind ?? null,
+		seatRole: agent.seatRole ?? null,
 		runStartedAt: agent.runStartedAt ?? agent.startedAt,
 		interruptedTurnId: agent.interruptedTurnId ?? null,
 		finishNote: agent.finishNote ?? null,
@@ -281,8 +184,10 @@ function isRecoverableState(state: AgentLifecycleState): boolean {
 }
 
 function normalizeAgentRecord(agent: AgentRecord): AgentRecord {
+	const legacy = agent as AgentRecord & { seatBucket?: SeatRole | null };
 	return {
 		...cloneAgent(agent),
+		seatRole: agent.seatRole ?? legacy.seatBucket ?? null,
 		returnMode: "wait",
 		activityLabel:
 			agent.activityLabel ??
@@ -375,10 +280,10 @@ export class DoeRegistry extends EventEmitter {
 		return batch;
 	}
 
-	assignSeat(input: { agentId: string; ic?: string | null; bucket?: AssignableRosterBucket | null }): RosterSeatRecord {
+	assignSeat(input: { agentId: string; ic?: string | null; role?: ICRole | null }): RosterSeatRecord {
 		const seat = input.ic?.trim()
 			? this.requireSeatForAssignment(input.ic)
-			: this.allocateSeat(input.bucket ?? "mid");
+			: this.allocateSeat(input.role ?? "mid");
 		if (seat.activeAgentId && seat.activeAgentId !== input.agentId) {
 			throw new Error(`${seat.name} already has an active assignment.`);
 		}
@@ -501,20 +406,20 @@ export class DoeRegistry extends EventEmitter {
 		return typeof limit === "number" ? entries.slice(0, limit) : entries;
 	}
 
-	getRosterBucketSummaries(options: { includeAwaitingInput?: boolean; includeHistory?: boolean } = {}): RosterBucketSummary[] {
-		const counts = new Map<RosterBucket, RosterBucketSummary>();
-		for (const bucket of ROSTER_BUCKET_ORDER) {
-			counts.set(bucket, { bucket, label: ROSTER_BUCKET_LABELS[bucket], activeCount: 0, names: [] });
+	getRosterRoleSummaries(options: { includeAwaitingInput?: boolean; includeHistory?: boolean } = {}): RosterRoleSummary[] {
+		const counts = new Map<SeatRole, RosterRoleSummary>();
+		for (const role of SEAT_ROLES) {
+			counts.set(role, { role, label: SEAT_ROLE_LABELS[role], activeCount: 0, names: [] });
 		}
 		for (const entry of this.listRosterAssignments({
 			includeAwaitingInput: options.includeAwaitingInput ?? true,
 			includeHistory: options.includeHistory ?? false,
 		})) {
-			const summary = counts.get(entry.seat.bucket)!;
+			const summary = counts.get(entry.seat.role)!;
 			summary.activeCount += 1;
 			summary.names.push(entry.seat.name);
 		}
-		return [...ROSTER_BUCKET_ORDER].map((bucket) => counts.get(bucket)!);
+		return [...SEAT_ROLES].map((role) => counts.get(role)!);
 	}
 
 	finalizeSeat(
@@ -936,7 +841,7 @@ export class DoeRegistry extends EventEmitter {
 
 	serialize(): PersistedRegistrySnapshot {
 		return {
-			version: 5,
+			version: 6,
 			savedAt: Date.now(),
 			agents: this.listAgents(),
 			batches: this.listBatches(),
@@ -972,14 +877,12 @@ export class DoeRegistry extends EventEmitter {
 
 	private resetRoster() {
 		this.seats.clear();
-		for (const seat of FIXED_SEATS) {
+		for (const ic of IC_CONFIG) {
 			this.seats.set(
-				normalizeSeatName(seat.name),
+				normalizeSeatName(ic.name),
 				defaultSeatRecord({
-					name: seat.name,
-					bucket: seat.bucket,
-					kind: "named",
-					order: seat.order,
+					name: ic.name,
+					role: ic.role,
 				}),
 			);
 		}
@@ -988,12 +891,13 @@ export class DoeRegistry extends EventEmitter {
 
 	private restoreRoster(roster: PersistedRosterSnapshot) {
 		this.resetRoster();
-		for (const seat of roster.seats ?? []) {
+		for (const storedSeat of roster.seats ?? []) {
+			const seat = storedSeat as RosterSeatRecord;
 			const normalizedName = normalizeSeatName(seat.name);
-			const fixed = FIXED_SEATS.find((entry) => normalizeSeatName(entry.name) === normalizedName);
-			if (fixed) {
+			const ic = findICConfigByName(seat.name);
+			if (ic) {
 				this.seats.set(normalizedName, {
-					...defaultSeatRecord({ name: fixed.name, bucket: fixed.bucket, kind: "named", order: fixed.order }),
+					...defaultSeatRecord({ name: ic.name, role: ic.role }),
 					activeAgentId: seat.activeAgentId ?? null,
 					lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
 					lastThreadId: seat.lastThreadId ?? null,
@@ -1009,9 +913,7 @@ export class DoeRegistry extends EventEmitter {
 				{
 					...defaultSeatRecord({
 						name: `contractor-${number}`,
-						bucket: "contractor",
-						kind: "contractor",
-						order: number,
+						role: "contractor",
 					}),
 					activeAgentId: seat.activeAgentId ?? null,
 					lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
@@ -1029,26 +931,25 @@ export class DoeRegistry extends EventEmitter {
 	}
 
 	private migrateLegacyRosterLinks() {
-		for (const seat of FIXED_SEATS) {
+		for (const ic of IC_CONFIG) {
 			const agent = [...this.agents.values()].find(
 				(entry) =>
-					entry.name === seat.name &&
+					entry.name === ic.name &&
 					!entry.seatName &&
 					isAttachedState(entry.state) &&
-					!(this.seats.get(normalizeSeatName(seat.name))?.activeAgentId),
+					!(this.seats.get(normalizeSeatName(ic.name))?.activeAgentId),
 			);
 			if (!agent) continue;
 			const nextSeat = {
-				...this.seats.get(normalizeSeatName(seat.name))!,
+				...this.seats.get(normalizeSeatName(ic.name))!,
 				activeAgentId: agent.id,
 			};
-			this.seats.set(normalizeSeatName(seat.name), nextSeat);
+			this.seats.set(normalizeSeatName(ic.name), nextSeat);
 			this.agents.set(agent.id, {
 				...cloneAgent(agent),
-				name: seat.name,
-				seatName: seat.name,
-				seatBucket: seat.bucket,
-				seatKind: "named",
+				name: ic.name,
+				seatName: ic.name,
+				seatRole: ic.role,
 			});
 		}
 	}
@@ -1059,15 +960,24 @@ export class DoeRegistry extends EventEmitter {
 			const key = normalizeSeatName(agent.seatName);
 			const existing = this.seats.get(key);
 			if (!existing) {
+				const ic = findICConfigByName(agent.seatName);
+				if (ic) {
+					this.seats.set(
+						key,
+						defaultSeatRecord({
+							name: ic.name,
+							role: ic.role,
+						}),
+					);
+					continue;
+				}
 				const number = contractorNumber(agent.seatName);
 				if (number === null) continue;
 				this.seats.set(
 					key,
 					defaultSeatRecord({
 						name: `contractor-${number}`,
-						bucket: "contractor",
-						kind: "contractor",
-						order: number,
+						role: "contractor",
 					}),
 				);
 			}
@@ -1097,8 +1007,7 @@ export class DoeRegistry extends EventEmitter {
 			const next = {
 				...cloneAgent(agent),
 				name: seat.name,
-				seatBucket: seat.bucket,
-				seatKind: seat.kind,
+				seatRole: seat.role,
 			};
 			if (isAttachedState(next.state)) {
 				if (!seat.activeAgentId) {
@@ -1145,16 +1054,14 @@ export class DoeRegistry extends EventEmitter {
 		return seat;
 	}
 
-	private allocateSeat(bucket: AssignableRosterBucket): RosterSeatRecord {
-		const named = this.listRosterSeats().find((seat) => seat.kind === "named" && seat.bucket === bucket && !seat.activeAgentId);
+	private allocateSeat(role: ICRole): RosterSeatRecord {
+		const named = this.listRosterSeats().find((seat) => seat.role === role && !seat.activeAgentId);
 		if (named) return named;
-		const contractor = this.listRosterSeats().find((seat) => seat.kind === "contractor" && !seat.activeAgentId);
+		const contractor = this.listRosterSeats().find((seat) => seat.role === "contractor" && !seat.activeAgentId);
 		if (contractor) return contractor;
 		const seat = defaultSeatRecord({
 			name: `contractor-${this.nextContractorNumber}`,
-			bucket: "contractor",
-			kind: "contractor",
-			order: this.nextContractorNumber,
+			role: "contractor",
 		});
 		this.nextContractorNumber += 1;
 		this.seats.set(normalizeSeatName(seat.name), seat);
@@ -1190,8 +1097,7 @@ export class DoeRegistry extends EventEmitter {
 		if (!seat) return;
 		const nextSeat = { ...seat };
 		next.name = seat.name;
-		next.seatBucket = seat.bucket;
-		next.seatKind = seat.kind;
+		next.seatRole = seat.role;
 		if (isAttachedState(next.state)) {
 			nextSeat.activeAgentId = next.id;
 		} else {

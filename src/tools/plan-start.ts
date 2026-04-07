@@ -92,7 +92,7 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 			const startedAt = Date.now();
 			const seat = deps.registry.assignSeat({
 				agentId,
-				bucket: "research",
+				role: "research",
 			});
 
 			deps.registry.upsertAgent({
@@ -120,8 +120,7 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 				completionNotified: false,
 				recovered: false,
 				seatName: seat.name,
-				seatBucket: seat.bucket,
-				seatKind: seat.kind,
+				seatRole: seat.role,
 				finishNote: null,
 				reuseSummary: null,
 				messages: [],
