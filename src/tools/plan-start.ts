@@ -10,19 +10,13 @@ import {
 	formatPlanReuseError,
 	getSharedKnowledgebaseContext,
 	preparePlanFile,
-	readPlanFile,
 	readPlanTemplateDefaults,
 	renderPlanPrompt,
 } from "../plan/flow.ts";
-import { resolveAgentFinalOutput } from "./agent-final-output.ts";
 import { formatContextStatusLines } from "./context-status.ts";
 import {
-	attachPlanReviewOutcomeHandler,
-	ensurePlanReviewPending,
 	formatPlanProgressSummary,
 	type PlanWorkflowToolDeps,
-	setPlanReadyForReview,
-	setPlanReadyWithPendingReview,
 } from "./plan-workflow.ts";
 import { renderToolResultText } from "./tool-render.ts";
 import { recordStartedTurn } from "./turn-start.ts";
@@ -31,15 +25,6 @@ type PlanStartToolDeps = PlanWorkflowToolDeps;
 interface PlanStartWorkflowInput {
 	deps: PlanStartToolDeps;
 	params: any;
-	signal?: AbortSignal;
-	onUpdate?: ((update: any) => void) | undefined;
-}
-
-interface PlanStartFinishInput {
-	deps: PlanStartToolDeps;
-	context: ReturnType<typeof buildPlanStartContext>;
-	agentId: string;
-	signal?: AbortSignal | undefined;
 	onUpdate?: ((update: any) => void) | undefined;
 }
 
@@ -47,8 +32,7 @@ interface PlanStartResultInput {
 	context: ReturnType<typeof buildPlanStartContext>;
 	seatName: string;
 	sessionSlug: string;
-	finalAgent: any;
-	reviewId: string;
+	agent: any;
 }
 
 const PLAN_START_TOOL_META = {
@@ -219,110 +203,48 @@ async function startPlanDraft(
 	});
 }
 
-async function finishPlanStart(input: PlanStartFinishInput) {
-	const { deps, context, agentId, signal, onUpdate } = input;
-	const finalAgent = await deps.registry.waitForAgent(agentId, signal);
-	readPlanFile(context.planFile.planFilePath);
-	const matchActivePlan = (
-		activePlan: NonNullable<ReturnType<typeof deps.getPlanState>["activePlan"]>,
-	) =>
-		activePlan.agentId === agentId
-		&& activePlan.planFilePath === context.planFile.planFilePath
-		&& activePlan.planSlug === context.planFile.planSlug;
-
-	const startedAt = Date.now();
-	const reviewJob = deps.startReviewPlan({
-		planFilePath: context.planFile.planFilePath,
-		cwd: context.repoRoot,
-	});
-	try {
-		await ensurePlanReviewPending(reviewJob);
-	} catch (error) {
-		setPlanReadyForReview(deps.setPlanState, matchActivePlan);
-		throw error;
-	}
-	const matchPendingReview = (
-		pendingReview: NonNullable<ReturnType<typeof deps.getPlanState>["pendingReview"]>,
-	) =>
-		pendingReview.reviewId === reviewJob.reviewId
-		&& pendingReview.planFilePath === context.planFile.planFilePath
-		&& pendingReview.planSlug === context.planFile.planSlug;
-	setPlanReadyWithPendingReview(
-		deps.setPlanState,
-		matchActivePlan,
-		{
-			reviewId: reviewJob.reviewId,
-			sessionSlug: context.sessionSlug,
-			planSlug: context.planFile.planSlug,
-			planFilePath: context.planFile.planFilePath,
-			agentId,
-			requestedAt: startedAt,
-		},
-	);
-	onUpdate?.({
-		content: [{
-			type: "text",
-			text:
-				`Draft complete for ${context.planFile.planSlug}. Plannotator review started in background (review ${reviewJob.reviewId}).`,
-		}],
-		details: {
-			planSlug: context.planFile.planSlug,
-			planFilePath: context.planFile.planFilePath,
-			reviewId: reviewJob.reviewId,
-		},
-	});
-	attachPlanReviewOutcomeHandler({
-		wait: reviewJob.wait,
-		reviewId: reviewJob.reviewId,
-		setPlanState: deps.setPlanState,
-		matchActive: matchActivePlan,
-		matchPending: matchPendingReview,
-	});
-
-	return { finalAgent, reviewId: reviewJob.reviewId };
-}
-
 function buildPlanStartResult(input: PlanStartResultInput) {
-	const { context, seatName, sessionSlug, finalAgent, reviewId } = input;
+	const { context, seatName, sessionSlug, agent } = input;
 	return {
 		content: [{
 			type: "text",
 			text: [
 				`ic: ${seatName}`,
+				`agent_id: ${context.agentId}`,
+				`thread_id: ${agent?.threadId ?? "pending"}`,
 				`plan_slug: ${context.planFile.planSlug}`,
-				"state: ready_for_review",
-				`context: ${formatUsageCompact(finalAgent.usage)}`,
-				...formatContextStatusLines(finalAgent.compaction),
+				"state: drafting",
+				`context: ${formatUsageCompact(agent?.usage)}`,
+				...formatContextStatusLines(agent?.compaction),
 				`plan_file: ${context.planFile.planFilePath}`,
-				"review_status: pending",
-				`review_id: ${reviewId}`,
 				"",
 				...formatPlanProgressSummary({
 					happened:
-						"Draft completed and review was started asynchronously. Use plan_resume to check progress.",
-					agent: finalAgent,
+						"Draft turn started and is running in the background. Review will start automatically after the draft completes.",
+					agent: agent ?? null,
 				}),
 			].join("\n"),
 		}],
 		details: {
-			agent: finalAgent,
+			agent: agent ?? null,
 			ic: seatName,
 			sessionSlug,
 			planSlug: context.planFile.planSlug,
 			planFilePath: context.planFile.planFilePath,
-			reviewStatus: "pending",
+			reviewStatus: null,
 			reviewFeedback: null,
-			reviewId,
-			happened: "Draft completed and review started in background.",
-			agentResponseAt: finalAgent?.completedAt ?? null,
-			lastAgentMessage: resolveAgentFinalOutput(finalAgent, "unknown"),
+			reviewId: null,
+			happened:
+				"Draft turn started and is running in the background. Review will start automatically after the draft completes.",
+			agentResponseAt: agent?.completedAt ?? null,
+			lastAgentMessage: agent?.latestFinalOutput ?? null,
 			sharedKnowledgebasePath: context.shared.sharedKnowledgebasePath,
 		},
 	};
 }
 
 async function executePlanStartWorkflow(input: PlanStartWorkflowInput) {
-	const { deps, params, signal, onUpdate } = input;
+	const { deps, params, onUpdate } = input;
 	const context = buildPlanStartContext(deps, params);
 	seedPlanStartAgent(deps, context);
 
@@ -354,19 +276,12 @@ async function executePlanStartWorkflow(input: PlanStartWorkflowInput) {
 		throw error;
 	}
 
-	const { finalAgent, reviewId } = await finishPlanStart({
-		deps,
-		context,
-		agentId: context.agentId,
-		signal,
-		onUpdate,
-	});
+	const agent = deps.registry.getAgent(context.agentId) ?? null;
 	return buildPlanStartResult({
 		context,
 		seatName: context.seat.name,
 		sessionSlug: context.sessionSlug,
-		finalAgent,
-		reviewId,
+		agent,
 	});
 }
 
@@ -382,8 +297,8 @@ function createPlanStartTool(deps: PlanStartToolDeps) {
 		async execute(
 			...args: [string, any, AbortSignal | undefined, ((update: any) => void) | undefined]
 		) {
-			const [, params, signal, onUpdate] = args;
-			return executePlanStartWorkflow({ deps, params, signal, onUpdate });
+			const [, params, _signal, onUpdate] = args;
+			return executePlanStartWorkflow({ deps, params, onUpdate });
 		},
 	};
 }

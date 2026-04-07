@@ -26,6 +26,8 @@ const PROBE_SCRIPT = `
 
 	mock.module("./src/codex/model-selection.ts", () => ({
 		validateModelId: (value) => value,
+		readOptionalModelId: (value) =>
+			typeof value === "string" && value.trim().length > 0 ? value : null,
 	}));
 
 	mock.module("./src/plan/session-state.ts", () => ({
@@ -77,6 +79,7 @@ const PROBE_SCRIPT = `
 			return null;
 		},
 		loadMarkdownDocs: () => [],
+		renderMarkdownTemplate: () => "",
 		summarizeTemplates: () => "",
 	}));
 

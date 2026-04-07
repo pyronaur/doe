@@ -7,6 +7,8 @@ import {
 import type { CodexClientEvent } from "./codex/client.ts";
 import { validateModelId } from "./codex/model-selection.ts";
 import { requestDirectorPermissionApproval } from "./codex/permission-approval.ts";
+import { startPlanReviewCli } from "./plan/review.ts";
+import { DoePlanReviewCoordinator } from "./plan/runtime-review.ts";
 import {
 	clonePlanState,
 	createEmptyPlanState,
@@ -46,6 +48,7 @@ export interface DoeRuntime {
 	registry: DoeRegistry;
 	planState: DoePlanState;
 	liveView: AgentLiveViewController;
+	planReviewCoordinator: DoePlanReviewCoordinator;
 	latestCtx: DoeExtensionContext | null;
 	persistTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -160,6 +163,9 @@ function handleRegistryEvent(state: DoeState, event: RegistryEvent) {
 			updateUi(state, runtime.latestCtx);
 		}
 		return;
+	}
+	if (event.type === "agent-terminal") {
+		runtime.planReviewCoordinator.onAgentTerminal(event.agent);
 	}
 	if (event.type === "agent-terminal" || event.type === "batch-completed") {
 		flushPersist(state);
@@ -371,11 +377,19 @@ export function activate(state: DoeState, ctx?: DoeExtensionContext): DoeRuntime
 	});
 	const registry = new DoeRegistry();
 	const liveView = new AgentLiveViewController(registry, client);
-	const runtime: DoeRuntime = {
+	let runtime: DoeRuntime;
+	const planReviewCoordinator = new DoePlanReviewCoordinator({
+		registry,
+		getPlanState: () => clonePlanState(runtime.planState),
+		setPlanState: (updater, options) => updatePlanState(state, updater, options),
+		startReviewPlan: startPlanReviewCli,
+	});
+	runtime = {
 		client,
 		registry,
 		planState: createEmptyPlanState(),
 		liveView,
+		planReviewCoordinator,
 		latestCtx: ctx ?? null,
 		persistTimer: null,
 	};
@@ -442,6 +456,7 @@ export async function restoreState(state: DoeState, ctx: DoeExtensionContext) {
 	const runtime = getRuntime(state);
 	runtime.planState = restoreLatestPlanState(ctx.sessionManager.getBranch());
 	runtime.registry.restore(latestSnapshot(ctx));
+	runtime.planReviewCoordinator.onRestore();
 	const recoverableAgents = runtime.registry.listRecoverableAgents();
 	if (recoverableAgents.length === 0) {
 		return;
@@ -471,4 +486,5 @@ export async function restoreState(state: DoeState, ctx: DoeExtensionContext) {
 			);
 		}
 	}
+	runtime.planReviewCoordinator.onRestore();
 }
