@@ -77,6 +77,7 @@ export interface BatchRecord {
 export interface RosterSeatRecord {
 	name: string;
 	role: SeatRole;
+	model: string;
 	activeAgentId?: string | null;
 	lastFinishedAgentId?: string | null;
 	lastThreadId?: string | null;

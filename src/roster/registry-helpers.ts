@@ -45,10 +45,11 @@ export function contractorNumber(name: string): number | null {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-export function defaultSeatRecord(input: { name: string; role: SeatRole }): RosterSeatRecord {
+export function defaultSeatRecord(input: { name: string; role: SeatRole; model: string }): RosterSeatRecord {
 	return {
 		name: input.name,
 		role: input.role,
+		model: input.model,
 		activeAgentId: null,
 		lastFinishedAgentId: null,
 		lastThreadId: null,
@@ -60,6 +61,7 @@ export function defaultSeatRecord(input: { name: string; role: SeatRole }): Rost
 export function cloneSeat(seat: RosterSeatRecord): RosterSeatRecord {
 	return {
 		...seat,
+		model: seat.model,
 		activeAgentId: seat.activeAgentId ?? null,
 		lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
 		lastThreadId: seat.lastThreadId ?? null,

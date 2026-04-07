@@ -60,10 +60,22 @@ export class DoeRegistryBase extends EventEmitter {
 		return batch;
 	}
 
-	assignSeat(input: { agentId: string; ic?: string | null; role?: ICRole | null }): RosterSeatRecord {
-		const seat = input.ic?.trim()
-			? this.requireSeatForAssignment(input.ic)
-			: this.allocateSeat(input.role ?? "mid");
+	assignSeat(input: { agentId: string; ic?: string | null; role?: ICRole | null; model?: string | null }): RosterSeatRecord {
+		const requestedIc = input.ic?.trim() || null;
+		const requestedRole = input.role ?? null;
+		if (!requestedIc && !requestedRole) {
+			throw new Error("Seat assignment requires either an explicit IC or an explicit role.");
+		}
+		let seat = requestedIc
+			? this.requireSeatForAssignment(requestedIc)
+			: this.allocateSeat(requestedRole!, input.model ?? null);
+		if (seat.role === "contractor") {
+			if (!requestedRole) throw new Error("Contractor assignments require an explicit role.");
+			if (!input.model) throw new Error("Contractor assignments require an explicit model.");
+			seat = { ...seat, model: input.model };
+		} else if (requestedRole && requestedRole !== seat.role) {
+			throw new Error(`${seat.name} is a ${seat.role} seat, not ${requestedRole}.`);
+		}
 		if (seat.activeAgentId && seat.activeAgentId !== input.agentId) {
 			throw new Error(`${seat.name} already has an active assignment.`);
 		}
@@ -265,7 +277,10 @@ export class DoeRegistryBase extends EventEmitter {
 	protected resetRoster() {
 		this.seats.clear();
 		for (const ic of IC_CONFIG) {
-			this.seats.set(normalizeSeatName(ic.name), defaultSeatRecord({ name: ic.name, role: ic.role }));
+			this.seats.set(
+				normalizeSeatName(ic.name),
+				defaultSeatRecord({ name: ic.name, role: ic.role, model: ic.defaults.model }),
+			);
 		}
 		this.nextContractorNumber = 1;
 	}
@@ -297,14 +312,21 @@ export class DoeRegistryBase extends EventEmitter {
 		return seat;
 	}
 
-	protected allocateSeat(role: ICRole): RosterSeatRecord {
+	protected allocateSeat(role: ICRole, model: string | null): RosterSeatRecord {
 		const named = this.listRosterSeats().find((seat) => seat.role === role && !seat.activeAgentId);
 		if (named) return named;
 		const contractor = this.listRosterSeats().find((seat) => seat.role === "contractor" && !seat.activeAgentId);
-		if (contractor) return contractor;
+		if (contractor) {
+			if (!model) throw new Error("Contractor assignments require an explicit model.");
+			const next = { ...contractor, model };
+			this.seats.set(normalizeSeatName(next.name), next);
+			return cloneSeat(next);
+		}
+		if (!model) throw new Error("Contractor assignments require an explicit model.");
 		const seat = defaultSeatRecord({
 			name: `contractor-${this.nextContractorNumber}`,
 			role: "contractor",
+			model,
 		});
 		this.nextContractorNumber += 1;
 		this.seats.set(normalizeSeatName(seat.name), seat);

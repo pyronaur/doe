@@ -51,12 +51,12 @@ export class DoeRegistry extends DoeRegistryRuntime {
 	private restoreRoster(roster: PersistedRosterSnapshot) {
 		this.resetRoster();
 		for (const storedSeat of roster.seats ?? []) {
-			const seat = storedSeat as RosterSeatRecord;
+			const seat = storedSeat as Partial<RosterSeatRecord> & { name: string };
 			const normalizedName = normalizeSeatName(seat.name);
 			const ic = findICConfigByName(seat.name);
 			if (ic) {
 				this.seats.set(normalizedName, {
-					...defaultSeatRecord({ name: ic.name, role: ic.role }),
+					...defaultSeatRecord({ name: ic.name, role: ic.role, model: ic.defaults.model }),
 					activeAgentId: seat.activeAgentId ?? null,
 					lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
 					lastThreadId: seat.lastThreadId ?? null,
@@ -67,10 +67,14 @@ export class DoeRegistry extends DoeRegistryRuntime {
 			}
 			const number = contractorNumber(seat.name);
 			if (number === null) continue;
+			if (typeof seat.model !== "string" || !seat.model.trim()) {
+				throw new Error(`Stored contractor seat "${seat.name}" is missing a model.`);
+			}
 			this.seats.set(normalizedName, {
 				...defaultSeatRecord({
 					name: `contractor-${number}`,
 					role: "contractor",
+					model: seat.model.trim(),
 				}),
 				activeAgentId: seat.activeAgentId ?? null,
 				lastFinishedAgentId: seat.lastFinishedAgentId ?? null,
@@ -115,12 +119,12 @@ export class DoeRegistry extends DoeRegistryRuntime {
 			if (!existing) {
 				const ic = findICConfigByName(agent.seatName);
 				if (ic) {
-					this.seats.set(key, defaultSeatRecord({ name: ic.name, role: ic.role }));
+					this.seats.set(key, defaultSeatRecord({ name: ic.name, role: ic.role, model: ic.defaults.model }));
 					continue;
 				}
 				const number = contractorNumber(agent.seatName);
 				if (number === null) continue;
-				this.seats.set(key, defaultSeatRecord({ name: `contractor-${number}`, role: "contractor" }));
+				this.seats.set(key, defaultSeatRecord({ name: `contractor-${number}`, role: "contractor", model: agent.model }));
 			}
 		}
 

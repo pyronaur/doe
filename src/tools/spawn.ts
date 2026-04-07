@@ -9,7 +9,7 @@ import { readOptionalModelId, validateModelId } from "../codex/model-selection.j
 import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
 import { IC_ROLES } from "../roster/config.js";
 import type { DoeRegistry } from "../roster/registry.js";
-import type { ICRole, NotificationMode } from "../roster/types.js";
+import type { ICRole, NotificationMode, SeatRole } from "../roster/types.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.js";
 import { normalizeSpawnSeatIntent } from "./spawn-seat-intent.js";
@@ -160,6 +160,12 @@ export function resolveSandboxMode(role: ICRole | null | undefined, sandbox?: Sa
 	return "read-only";
 }
 
+function resolveSeatExecutionRole(requestedRole: ICRole | null | undefined, seatRole: SeatRole): ICRole {
+	if (seatRole === "senior" || seatRole === "mid" || seatRole === "research") return seatRole;
+	if (requestedRole) return requestedRole;
+	throw new Error("Contractor assignments require an explicit role.");
+}
+
 async function executeSpawnLike(
 	params: any,
 	signal: AbortSignal | undefined,
@@ -218,17 +224,23 @@ async function executeSpawnLike(
 			const sharedContext = getSharedKnowledgebaseContext(cwd, sessionSlug);
 			const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir, sharedContext);
 			const explicitModel = readOptionalModelId(rawTask.model, "model");
-			const model = validateModelId(explicitModel ?? templateDefaultModel ?? "gpt-5.4-mini", explicitModel ? "model" : "resolved model");
 			const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
 			const allowWrite = inferAllowWrite(rawTask, templateName);
-			const sandbox = resolveSandboxMode((rawTask.role ?? "mid") as ICRole, rawTask.sandbox ?? params.sandbox);
 			const agentId = seededAgentIds[index - 1]!;
 			promptsByAgentId[agentId] = prompt;
+			const requestedRole = rawTask.role ? (rawTask.role as ICRole) : null;
 			const seat = deps.registry.assignSeat({
 				agentId,
 				ic: rawTask.ic ?? null,
-				role: (rawTask.role ?? "mid") as ICRole,
+				role: requestedRole,
+				model: explicitModel ?? templateDefaultModel,
 			});
+			const model = validateModelId(
+				explicitModel ?? templateDefaultModel ?? seat.model,
+				explicitModel ? "model" : "resolved model",
+			);
+			const executionRole = resolveSeatExecutionRole(requestedRole, seat.role);
+			const sandbox = resolveSandboxMode(executionRole, rawTask.sandbox ?? params.sandbox);
 			const now = Date.now();
 
 			deps.registry.upsertAgent({
@@ -339,7 +351,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			"Use for new work only. Do not use when an existing thread has relevant context — use codex_resume instead.",
 			"Use name for the task label. Use ic for seat targeting.",
 			"Fresh spawn on the same seat starts a new thread and does not preserve thread memory. Use codex_resume when the same thread context should continue.",
-			"Pass ic to target a specific named seat, or role to auto-allocate the next free IC in senior|mid|research.",
+			"Pass ic to target a specific named seat, or pass role to auto-allocate the next free IC in senior|mid|research. DOE rejects tasks that omit both.",
 			"Compatibility shim: if name exactly matches an existing seat and ic is omitted, DOE treats that name as the intended seat.",
 			"Each new task gets a fresh assignment. If a role is full, DOE allocates contractor-N overflow seats.",
 			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",

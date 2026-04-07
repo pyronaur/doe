@@ -42,12 +42,37 @@ test("registry seeds fixed IC roster in role order", () => {
 	);
 });
 
+test("registry keeps seat models on named ICs", () => {
+	const registry = new DoeRegistry();
+	assert.equal(registry.findSeat("Tony")?.model, "gpt-5.4");
+	assert.equal(registry.findSeat("Hope")?.model, "gpt-5.3-codex-spark");
+});
+
+test("seat assignment requires an explicit IC or an explicit role", () => {
+	const registry = new DoeRegistry();
+	assert.throws(
+		() => registry.assignSeat({ agentId: "agent-1" }),
+		/Seat assignment requires either an explicit IC or an explicit role\./,
+	);
+});
+
+test("contractor assignments require an explicit model", () => {
+	const registry = new DoeRegistry();
+	registry.assignSeat({ agentId: "agent-1", role: "mid" });
+	registry.assignSeat({ agentId: "agent-2", role: "mid" });
+	registry.assignSeat({ agentId: "agent-3", role: "mid" });
+	assert.throws(
+		() => registry.assignSeat({ agentId: "agent-4", role: "mid" }),
+		/Contractor assignments require an explicit model\./,
+	);
+});
+
 test("contractor numbering is stable across serialize and restore", () => {
 	const registry = new DoeRegistry();
 	const peter = registry.assignSeat({ agentId: "agent-1", role: "mid" });
 	const sam = registry.assignSeat({ agentId: "agent-2", role: "mid" });
 	const scott = registry.assignSeat({ agentId: "agent-3", role: "mid" });
-	const contractor1 = registry.assignSeat({ agentId: "agent-4", role: "mid" });
+	const contractor1 = registry.assignSeat({ agentId: "agent-4", role: "mid", model: "gpt-5.4" });
 	assert.equal(peter.name, "Peter");
 	assert.equal(sam.name, "Sam");
 	assert.equal(scott.name, "Scott");
@@ -60,8 +85,36 @@ test("contractor numbering is stable across serialize and restore", () => {
 
 	const restored = new DoeRegistry();
 	restored.restore(registry.serialize());
-	const contractor2 = restored.assignSeat({ agentId: "agent-5", role: "mid" });
+	const contractor2 = restored.assignSeat({ agentId: "agent-5", role: "mid", model: "gpt-5.4" });
 	assert.equal(contractor2.name, "contractor-2");
+});
+
+test("restore rejects contractor seats that are missing a persisted model", () => {
+	const registry = new DoeRegistry();
+	assert.throws(
+		() =>
+			registry.restore({
+				version: 6,
+				savedAt: Date.now(),
+				agents: [],
+				batches: [],
+				roster: {
+					seats: [
+						{
+							name: "contractor-1",
+							role: "contractor",
+							activeAgentId: null,
+							lastFinishedAgentId: null,
+							lastThreadId: null,
+							lastFinishNote: null,
+							lastReuseSummary: null,
+						} as any,
+					],
+					nextContractorNumber: 2,
+				},
+			}),
+		/Stored contractor seat "contractor-1" is missing a model\./,
+	);
 });
 
 test("completed named seats remain attached until finalize", () => {

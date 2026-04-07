@@ -83,6 +83,7 @@ test("CodexAppServerClient starts worker threads with full access by default", a
 	});
 
 	assert.equal(calls[0]?.method, "thread/start");
+	assert.equal(calls[0]?.params.model, "gpt-5.4");
 	assert.equal(calls[0]?.params.sandbox, "danger-full-access");
 });
 
