@@ -2,22 +2,21 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { truncateForDisplay } from "../codex/client.ts";
-import { formatUsageCompact } from "../context-usage.ts";
 import {
 	buildPlanResumePrompt,
 	getSharedKnowledgebaseContext,
-	readPlanFile,
 	readPlanTemplateDefaults,
 } from "../plan/flow.ts";
 import { hasPlanReviewJob } from "../plan/review.ts";
 import type { DoePlanState } from "../plan/session-state.ts";
 import type { DoeRegistry } from "../roster/registry.ts";
-import { resolveAgentFinalOutput } from "./agent-final-output.ts";
-import { formatContextStatusLines } from "./context-status.ts";
+import {
+	buildPlanResumeDraftingResult,
+	buildPlanResumePendingResult,
+} from "./plan-resume-result.ts";
 import {
 	attachPlanReviewOutcomeHandler,
 	ensurePlanReviewPending,
-	formatPlanProgressSummary,
 	type PlanWorkflowToolDeps,
 	setPlanReadyForReview,
 	setPlanReadyWithPendingReview,
@@ -50,14 +49,10 @@ interface PlanResumeTurnInput {
 	allowWrite: boolean;
 }
 
-interface PlanResumePendingResultInput {
-	agent: any | null;
-	sessionSlug: string;
-	planSlug: string;
-	planFilePath: string;
-	reviewId: string;
-	note: string;
-	includeFinalOutput?: boolean;
+interface PlanResumeTurnOutcome {
+	action: "steer_queued" | "turn_started";
+	threadId: string | null;
+	turnId: string | null;
 }
 
 interface PlanResumeRetryInput {
@@ -71,7 +66,6 @@ interface PlanResumeRevisionInput {
 	params: any;
 	state: ActivePlanState;
 	sessionSlug: string;
-	signal?: AbortSignal | undefined;
 }
 
 interface PlanResumePendingInput {
@@ -92,6 +86,7 @@ const PLAN_RESUME_TOOL_META = {
 		"When the workflow needs_revision, revise the same plan file and then re-run review.",
 		"DOE automatically includes the captured review feedback for the active plan.",
 		"Pass only the Director commentary needed for the revision.",
+		"Revision resumes return immediately after steer is queued or a new turn is started.",
 	],
 	parameters: Type.Object({
 		commentary: Type.Optional(Type.String({
@@ -100,60 +95,6 @@ const PLAN_RESUME_TOOL_META = {
 		})),
 	}),
 } as const;
-
-function buildPlanResumeResult(input: PlanResumePendingResultInput) {
-	const {
-		agent,
-		sessionSlug,
-		planSlug,
-		planFilePath,
-		reviewId,
-		note,
-		includeFinalOutput = false,
-	} = input;
-	const ic = agent?.seatName ?? agent?.name ?? "unknown";
-	const lines = [
-		`ic: ${ic}`,
-		`plan_slug: ${planSlug}`,
-		"state: ready_for_review",
-		...(agent
-			? [
-				`context: ${formatUsageCompact(agent.usage)}`,
-				...formatContextStatusLines(agent.compaction),
-			]
-			: []),
-		`plan_file: ${planFilePath}`,
-		"review_status: pending",
-		`review_id: ${reviewId}`,
-		"",
-		...formatPlanProgressSummary({
-			happened: note,
-			agent: agent ?? null,
-		}),
-	];
-	if (includeFinalOutput && agent) {
-		lines.push("", resolveAgentFinalOutput(agent, "unknown"));
-	}
-	return {
-		content: [{
-			type: "text",
-			text: lines.join("\n"),
-		}],
-		details: {
-			agent: agent ?? null,
-			ic,
-			sessionSlug,
-			planSlug,
-			planFilePath,
-			reviewStatus: "pending",
-			reviewFeedback: null,
-			reviewId,
-			happened: note,
-			agentResponseAt: agent?.completedAt ?? null,
-			lastAgentMessage: resolveAgentFinalOutput(agent, "unknown"),
-		},
-	};
-}
 
 function resolvePlanResumeAgent(registry: DoeRegistry, state: DoePlanState["activePlan"]) {
 	if (!state) {
@@ -199,7 +140,11 @@ async function runPlanResumeTurn(input: PlanResumeTurnInput) {
 			prompt,
 		})
 	) {
-		return;
+		return {
+			action: "steer_queued",
+			threadId: agent.threadId ?? null,
+			turnId: agent.activeTurnId ?? null,
+		} satisfies PlanResumeTurnOutcome;
 	}
 
 	const resumeInput = {
@@ -216,6 +161,12 @@ async function runPlanResumeTurn(input: PlanResumeTurnInput) {
 		registry: deps.registry,
 	};
 	await resumeThreadAndStartTurn(resumeInput);
+	const updatedAgent = deps.registry.findAgent(agent.id) ?? null;
+	return {
+		action: "turn_started",
+		threadId: agent.threadId ?? null,
+		turnId: updatedAgent?.activeTurnId ?? null,
+	} satisfies PlanResumeTurnOutcome;
 }
 
 async function startAsyncPlanReview(input: {
@@ -276,7 +227,7 @@ async function handlePlanResumeReviewRetry(input: PlanResumeRetryInput) {
 		sessionSlug,
 	});
 	const agent = state.agentId ? deps.registry.findAgent(state.agentId) ?? null : null;
-	return buildPlanResumeResult({
+	return buildPlanResumePendingResult({
 		agent,
 		sessionSlug: state.sessionSlug ?? sessionSlug,
 		planSlug: state.planSlug,
@@ -290,7 +241,7 @@ async function handlePlanResumePendingReview(input: PlanResumePendingInput) {
 	const { deps, state, pendingReview, sessionSlug } = input;
 	const agent = state.agentId ? deps.registry.findAgent(state.agentId) ?? null : null;
 	if (hasPlanReviewJob(pendingReview.reviewId)) {
-		return buildPlanResumeResult({
+		return buildPlanResumePendingResult({
 			agent,
 			sessionSlug: pendingReview.sessionSlug ?? sessionSlug,
 			planSlug: pendingReview.planSlug,
@@ -307,7 +258,7 @@ async function handlePlanResumePendingReview(input: PlanResumePendingInput) {
 		reviewId: pendingReview.reviewId,
 		requestedAt: pendingReview.requestedAt,
 	});
-	return buildPlanResumeResult({
+	return buildPlanResumePendingResult({
 		agent,
 		sessionSlug: pendingReview.sessionSlug ?? sessionSlug,
 		planSlug: pendingReview.planSlug,
@@ -318,7 +269,7 @@ async function handlePlanResumePendingReview(input: PlanResumePendingInput) {
 }
 
 async function handlePlanResumeRevision(input: PlanResumeRevisionInput) {
-	const { deps, params, state, sessionSlug, signal } = input;
+	const { deps, params, state, sessionSlug } = input;
 	const agent = resolvePlanResumeAgent(deps.registry, state);
 	if (!agent?.threadId) {
 		throw new Error(
@@ -344,39 +295,45 @@ async function handlePlanResumeRevision(input: PlanResumeRevisionInput) {
 		templateDefaults,
 		prompt,
 	});
-	await runPlanResumeTurn({
+	const outcome = await runPlanResumeTurn({
 		deps,
 		agent,
 		prompt,
 		templateDefaults,
 		allowWrite: true,
 	});
-
-	const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
-	readPlanFile(state.planFilePath);
-	const matchActivePlan = (activePlan: ActivePlanState) =>
-		activePlan.agentId === agent.id
-		&& activePlan.planSlug === state.planSlug
-		&& activePlan.planFilePath === state.planFilePath;
-	setPlanReadyForReview(deps.setPlanState, matchActivePlan);
-	const reviewId = await startAsyncPlanReview({
-		deps,
-		state,
-		sessionSlug,
-	});
-	return buildPlanResumeResult({
-		agent: finalAgent,
+	const nextAgent = deps.registry.findAgent(agent.id) ?? agent;
+	deps.setPlanState(
+		(current) => ({
+			...current,
+			activePlan: current.activePlan
+					&& current.activePlan.agentId === state.agentId
+					&& current.activePlan.planSlug === state.planSlug
+					&& current.activePlan.planFilePath === state.planFilePath
+				? {
+					...current.activePlan,
+					status: "drafting",
+					reviewFeedback: null,
+				}
+				: current.activePlan,
+		}),
+		{ flush: true },
+	);
+	const happened = outcome.action === "steer_queued"
+		? "Revision steer queued on the active planning turn. Review will run automatically after the draft completes."
+		: "Revision turn started and is running in the background. Review will run automatically after the draft completes.";
+	return buildPlanResumeDraftingResult({
+		agent: nextAgent,
 		sessionSlug: state.sessionSlug ?? sessionSlug,
 		planSlug: state.planSlug,
 		planFilePath: state.planFilePath,
-		reviewId,
-		note: "Revision complete. Review started in background.",
-		includeFinalOutput: true,
+		outcome,
+		note: happened,
 	});
 }
 
 async function executePlanResumeWorkflow(input: PlanResumeWorkflowInput) {
-	const { deps, params, signal } = input;
+	const { deps, params } = input;
 	const sessionSlug = deps.getSessionSlug();
 	if (!sessionSlug) {
 		throw new Error("No canonical session slug is set. Call session_set before plan_resume.");
@@ -428,7 +385,6 @@ async function executePlanResumeWorkflow(input: PlanResumeWorkflowInput) {
 		params,
 		state: state.activePlan,
 		sessionSlug,
-		signal,
 	});
 }
 

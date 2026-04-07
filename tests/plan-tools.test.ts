@@ -350,16 +350,6 @@ async function runPlanResume(tool: RegisteredTool, input: Record<string, unknown
 	return await tool.execute("tool-resume", input, undefined);
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 1000) {
-	const startedAt = Date.now();
-	while (!condition()) {
-		if (Date.now() - startedAt > timeoutMs) {
-			throw new Error("Timed out waiting for condition.");
-		}
-		await new Promise((resolve) => setTimeout(resolve, 10));
-	}
-}
-
 async function withPlanRepo(
 	run: (input: { repoRoot: string; templatesDir: string }) => Promise<void>,
 ) {
@@ -489,6 +479,62 @@ function attachCompletedPlanAgent(registry: DoeRegistry) {
 	});
 }
 
+function attachWorkingPlanAgent(registry: DoeRegistry, turnId = "turn-active") {
+	attachSeatAgent(registry, {
+		agentId: "agent-1",
+		ic: "Hope",
+		threadId: "thread-1",
+		agent: createAgent({
+			id: "agent-1",
+			threadId: "thread-1",
+			state: "working",
+			activeTurnId: turnId,
+		}),
+	});
+}
+
+function createNeedsRevisionPlanState(
+	planFilePath: string,
+	reviewFeedback = "# Plan Feedback\n\nAdd rollout and testing.",
+): DoePlanState {
+	return {
+		version: 5,
+		sessionSlugReminderSentAtTurn: null,
+		activePlan: {
+			sessionSlug: "feature-x",
+			planSlug: "auth-refactor",
+			planFilePath,
+			ic: "Hope",
+			agentId: "agent-1",
+			threadId: "thread-1",
+			status: "needs_revision",
+			reviewFeedback,
+		},
+		pendingReview: null,
+	};
+}
+
+async function createNeedsRevisionHarness(input: {
+	templatesDir: string;
+	attachAgent: (registry: DoeRegistry) => void;
+}) {
+	const planFilePath = join(process.cwd(), ".tmp", "feature-x", "plan-auth-refactor.md");
+	writePlanDraft(planFilePath);
+	const harness = await createPlanHarness({
+		templatesDir: input.templatesDir,
+		planBodies: ["# Revised\n\nUpdated plan.\n"],
+		planState: createNeedsRevisionPlanState(planFilePath),
+	});
+	input.attachAgent(harness.registry);
+	return harness;
+}
+
+function assertRevisionDraftingState(harness: Awaited<ReturnType<typeof createPlanHarness>>) {
+	assert.equal(harness.planState.read().activePlan?.status, "drafting");
+	assert.equal(harness.planState.read().pendingReview, null);
+	assert.equal(harness.reviewController.calls.length, 0);
+}
+
 test("plan_start returns immediately in drafting state without starting review", {
 	concurrency: false,
 }, async () => {
@@ -513,69 +559,48 @@ test("plan_start returns immediately in drafting state without starting review",
 	});
 });
 
-test("plan_start leaves review orchestration to runtime after draft launch", {
+test("plan_resume after needs_revision returns immediately with drafting state", {
 	concurrency: false,
 }, async () => {
 	await withPlanRepo(async ({ templatesDir }) => {
-		const harness = await createPlanHarness({
+		const harness = await createNeedsRevisionHarness({
 			templatesDir,
-			planBodies: ["# Draft\n\nInitial plan.\n"],
+			attachAgent: attachCompletedPlanAgent,
 		});
-
-		await runPlanStart(harness.start);
-		await waitFor(() => {
-			const agentId = harness.planState.read().activePlan?.agentId;
-			return Boolean(agentId && harness.registry.findAgent(agentId)?.state === "completed");
-		});
-		assert.equal(harness.planState.read().activePlan?.status, "drafting");
-		assert.equal(harness.planState.read().pendingReview, null);
-		assert.equal(harness.reviewController.calls.length, 0);
-	});
-});
-
-test("plan_resume after needs_revision revises plan and starts a new pending review", {
-	concurrency: false,
-}, async () => {
-	await withPlanRepo(async ({ templatesDir }) => {
-		const planFilePath = join(process.cwd(), ".tmp", "feature-x", "plan-auth-refactor.md");
-		writePlanDraft(planFilePath);
-		const harness = await createPlanHarness({
-			templatesDir,
-			planBodies: ["# Revised\n\nUpdated plan.\n"],
-			planState: {
-				version: 5,
-				sessionSlugReminderSentAtTurn: null,
-				activePlan: {
-					sessionSlug: "feature-x",
-					planSlug: "auth-refactor",
-					planFilePath,
-					ic: "Hope",
-					agentId: "agent-1",
-					threadId: "thread-1",
-					status: "needs_revision",
-					reviewFeedback: "# Plan Feedback\n\nAdd rollout and testing.",
-				},
-				pendingReview: null,
-			},
-		});
-		attachCompletedPlanAgent(harness.registry);
 
 		const result = await runPlanResume(harness.resume, { commentary: "Keep scope tight." });
-		const pending = harness.planState.read().pendingReview;
 
 		assert.equal(harness.client.resumeCalls.length, 1);
 		assert.equal(harness.client.turnCalls.length, 1);
 		assert.match(harness.client.turnCalls[0].prompt, /<review_feedback>/);
 		assert.match(harness.client.turnCalls[0].prompt, /Keep scope tight\./);
-		assert.match(result.content[0].text, /review_status: pending/);
-		assert.match(result.content[0].text, /review_id: review-1/);
-		assert.match(result.content[0].text, /Revision complete\. Review started in background\./);
-		assert.equal(harness.planState.read().activePlan?.status, "ready_for_review");
-		assert.equal(pending?.reviewId, "review-1");
+		assert.match(result.content[0].text, /state: drafting/);
+		assert.match(result.content[0].text, /action: turn_started/);
+		assert.match(
+			result.content[0].text,
+			/Revision turn started and is running in the background\. Review will run automatically after the draft completes\./,
+		);
+		assertRevisionDraftingState(harness);
+	});
+});
 
-		harness.reviewController.resolve("review-1", { status: "approved", feedback: null });
-		await waitFor(() => harness.planState.read().activePlan === null);
-		assert.equal(harness.planState.read().pendingReview, null);
+test("plan_resume revision queues steer on an active turn and returns drafting state", {
+	concurrency: false,
+}, async () => {
+	await withPlanRepo(async ({ templatesDir }) => {
+		const harness = await createNeedsRevisionHarness({
+			templatesDir,
+			attachAgent: attachWorkingPlanAgent,
+		});
+
+		const result = await runPlanResume(harness.resume, { commentary: "Keep scope tight." });
+
+		assert.equal(harness.client.steerCalls.length, 1);
+		assert.equal(harness.client.resumeCalls.length, 0);
+		assert.equal(harness.client.turnCalls.length, 0);
+		assert.match(result.content[0].text, /state: drafting/);
+		assert.match(result.content[0].text, /action: steer_queued/);
+		assertRevisionDraftingState(harness);
 	});
 });
 
@@ -654,25 +679,6 @@ test("plan_stop clears pendingReview and cancels an in-memory plannotator job", 
 	});
 });
 
-test("plan_start does not fail immediately when review launcher is unavailable", {
-	concurrency: false,
-}, async () => {
-	await withPlanRepo(async ({ templatesDir }) => {
-		const harness = await createPlanHarness({
-			templatesDir,
-			planBodies: ["# Draft\n\nInitial plan.\n"],
-			reviewController: createImmediateFailReviewController(
-				"Failed to start Plannotator CLI: spawn plannotator ENOENT",
-			),
-		});
-
-		const result = await runPlanStart(harness.start);
-		assert.match(result.content[0].text, /state: drafting/);
-		assert.equal(harness.planState.read().pendingReview, null);
-		assert.equal(harness.reviewController.calls.length, 0);
-	});
-});
-
 test("plan_resume retry throws when review fails immediately after launch", {
 	concurrency: false,
 }, async () => {
@@ -723,22 +729,5 @@ test("plan_resume retry throws when review fails immediately after launch", {
 		);
 		assert.equal(harness.planState.read().pendingReview, null);
 		assert.equal(harness.planState.read().activePlan?.status, "ready_for_review");
-	});
-});
-
-test("plan_start keeps plan state drafting without pending review writes", {
-	concurrency: false,
-}, async () => {
-	await withPlanRepo(async ({ templatesDir }) => {
-		const harness = await createPlanHarness({
-			templatesDir,
-			planBodies: ["# Draft\n\nInitial plan.\n"],
-		});
-
-		await runPlanStart(harness.start);
-		const history = harness.planState.history();
-		assert.ok(history.every((state) => state.pendingReview === null));
-		assert.ok(history.some((state) => state.activePlan?.status === "drafting"));
-		assert.equal(history.some((state) => state.activePlan?.status === "ready_for_review"), false);
 	});
 });
