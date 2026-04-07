@@ -1,7 +1,12 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CodexAppServerClient } from "./codex/app-server-client.ts";
+import {
+	CodexAppServerClient,
+	type PermissionApprovalRequest,
+	type PermissionApprovalResult,
+	type PermissionProfile,
+} from "./codex/app-server-client.ts";
 import type { CodexClientEvent } from "./codex/client.ts";
 import { validateModelId } from "./codex/model-selection.ts";
 import {
@@ -109,6 +114,71 @@ function getRuntime(state: DoeState): DoeRuntime {
 		throw new Error("Director of Engineering mode is not active. Start pi with --doe.");
 	}
 	return state.runtime;
+}
+
+function summarizePathList(paths: string[] | null | undefined): string | null {
+	if (paths === null) {
+		return "none";
+	}
+	if (!paths || paths.length === 0) {
+		return null;
+	}
+	return paths.join(", ");
+}
+
+function describePermissionRequest(permissions: PermissionProfile): string[] {
+	const lines: string[] = [];
+	const readPaths = summarizePathList(permissions.fileSystem?.read);
+	const writePaths = summarizePathList(permissions.fileSystem?.write);
+	const networkEnabled = permissions.network?.enabled;
+	if (readPaths !== null) {
+		lines.push(`filesystem read: ${readPaths}`);
+	}
+	if (writePaths !== null) {
+		lines.push(`filesystem write: ${writePaths}`);
+	}
+	if (typeof networkEnabled === "boolean") {
+		lines.push(`network: ${networkEnabled ? "enabled" : "disabled"}`);
+	}
+	return lines.length > 0 ? lines : ["(no additional permissions requested)"];
+}
+
+function resolveIcIdentity(runtime: DoeRuntime, threadId: string): string {
+	const agent = runtime.registry.getAgentByThreadId(threadId);
+	if (!agent) {
+		return threadId || "unknown";
+	}
+	const seat = agent.seatName ?? agent.name ?? "unknown";
+	return `${seat} (${agent.id})`;
+}
+
+async function requestDirectorPermissionApproval(
+	runtime: DoeRuntime,
+	request: PermissionApprovalRequest,
+): Promise<PermissionApprovalResult> {
+	const ctx = runtime.latestCtx;
+	if (!ctx?.hasUI) {
+		return { approved: false, scope: request.scope };
+	}
+	const titleLines = [
+		"IC permission approval required.",
+		`IC: ${resolveIcIdentity(runtime, request.threadId)}`,
+		`Thread: ${request.threadId}`,
+		...describePermissionRequest(request.permissions),
+		...(request.reason ? [`Reason: ${request.reason}`] : []),
+		`Scope: ${request.scope}`,
+		"",
+		"Approve this permission grant?",
+	];
+	const choice = await ctx.ui.select(titleLines.join("\n"), ["Yes", "No"]);
+	if (choice !== "Yes") {
+		return { approved: false, scope: request.scope };
+	}
+	return {
+		approved: true,
+		permissions: request.permissions,
+		scope: request.scope,
+	};
 }
 
 async function refreshThreadUsage(
@@ -350,7 +420,16 @@ export function activate(state: DoeState, ctx?: DoeExtensionContext): DoeRuntime
 		return state.runtime;
 	}
 
-	const client = new CodexAppServerClient({ serviceName: "pi_doe" });
+	const client = new CodexAppServerClient({
+		serviceName: "pi_doe",
+		requestPermissionApproval: async (request) => {
+			const activeRuntime = state.runtime;
+			if (!activeRuntime) {
+				return { approved: false, scope: request.scope };
+			}
+			return requestDirectorPermissionApproval(activeRuntime, request);
+		},
+	});
 	const registry = new DoeRegistry();
 	const liveView = new AgentLiveViewController(registry, client);
 	const runtime: DoeRuntime = {

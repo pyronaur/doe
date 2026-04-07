@@ -197,6 +197,81 @@ test("CodexAppServerClient keeps turn sandbox and approval gates separate", asyn
 	assert.deepEqual(sent[1], { id: 2, result: { decision: "decline" } });
 });
 
+test("CodexAppServerClient grants requested permissions when approved", async () => {
+	const client = new CodexAppServerClient({
+		requestPermissionApproval: async (request) => {
+			assert.equal(request.threadId, "thread-1");
+			assert.equal(request.turnId, "turn-1");
+			assert.equal(request.itemId, "item-1");
+			assert.equal(request.scope, "session");
+			assert.equal(request.reason, "Need write access for this patch");
+			return { approved: true };
+		},
+	});
+	const sent: unknown[] = [];
+	setMethod(client, "send", (message) => {
+		sent.push(message);
+	});
+
+	await Promise.resolve(
+		callMethod(client, "handleServerRequest", [3, "item/permissions/requestApproval", {
+			threadId: "thread-1",
+			turnId: "turn-1",
+			itemId: "item-1",
+			scope: "session",
+			reason: "Need write access for this patch",
+			permissions: {
+				fileSystem: { write: ["/tmp/target.ts"] },
+				network: { enabled: true },
+			},
+		}]),
+	);
+
+	assert.deepEqual(sent[0], {
+		id: 3,
+		result: {
+			permissions: {
+				fileSystem: { write: ["/tmp/target.ts"] },
+				network: { enabled: true },
+			},
+			scope: "session",
+		},
+	});
+});
+
+test("CodexAppServerClient denies requested permissions when declined", async () => {
+	const client = new CodexAppServerClient({
+		requestPermissionApproval: async (request) => {
+			assert.equal(request.scope, "turn");
+			return { approved: false };
+		},
+	});
+	const sent: unknown[] = [];
+	setMethod(client, "send", (message) => {
+		sent.push(message);
+	});
+
+	await Promise.resolve(
+		callMethod(client, "handleServerRequest", [4, "item/permissions/requestApproval", {
+			threadId: "thread-1",
+			turnId: "turn-1",
+			itemId: "item-2",
+			scope: "turn",
+			permissions: {
+				fileSystem: { read: ["/tmp/data.json"] },
+			},
+		}]),
+	);
+
+	assert.deepEqual(sent[0], {
+		id: 4,
+		result: {
+			permissions: {},
+			scope: "turn",
+		},
+	});
+});
+
 test("CodexAppServerClient forwards read-only sandbox settings", async () => {
 	const { client, calls } = createMockClient();
 

@@ -24,6 +24,82 @@ interface PendingRequest {
 	reject: (error: Error) => void;
 }
 
+export type PermissionGrantScope = "turn" | "session";
+
+export interface PermissionProfile {
+	fileSystem?: {
+		read?: string[] | null;
+		write?: string[] | null;
+	} | null;
+	network?: {
+		enabled?: boolean | null;
+	} | null;
+}
+
+export interface PermissionApprovalRequest {
+	threadId: string;
+	turnId: string;
+	itemId: string;
+	reason: string | null;
+	permissions: PermissionProfile;
+	scope: PermissionGrantScope;
+}
+
+export interface PermissionApprovalResult {
+	approved: boolean;
+	permissions?: PermissionProfile;
+	scope?: PermissionGrantScope;
+}
+
+function normalizeScope(value: unknown): PermissionGrantScope {
+	return value === "session" ? "session" : "turn";
+}
+
+function normalizePathList(value: unknown): string[] | null | undefined {
+	if (value === null) {
+		return null;
+	}
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function normalizePermissionProfile(value: unknown): PermissionProfile {
+	if (!isRecord(value)) {
+		return {};
+	}
+	const profile: PermissionProfile = {};
+	const fileSystem = isRecord(value.fileSystem) ? value.fileSystem : null;
+	const network = isRecord(value.network) ? value.network : null;
+	if (fileSystem || value.fileSystem === null) {
+		profile.fileSystem = {};
+		if (fileSystem) {
+			const read = normalizePathList(fileSystem.read);
+			const write = normalizePathList(fileSystem.write);
+			if (read !== undefined) {
+				profile.fileSystem.read = read;
+			}
+			if (write !== undefined) {
+				profile.fileSystem.write = write;
+			}
+		} else {
+			profile.fileSystem = null;
+		}
+	}
+	if (network || value.network === null) {
+		if (network) {
+			const enabled = typeof network.enabled === "boolean" || network.enabled === null
+				? network.enabled
+				: undefined;
+			profile.network = enabled === undefined ? {} : { enabled };
+		} else {
+			profile.network = null;
+		}
+	}
+	return profile;
+}
+
 function buildSandboxPolicy(sandbox: SandboxMode, networkAccess = false) {
 	if (sandbox === "read-only") { return buildReadOnlySandbox(networkAccess); }
 	if (sandbox === "workspace-write") {
@@ -61,9 +137,23 @@ export class CodexAppServerClient extends EventEmitter {
 	private pending = new Map<number, PendingRequest>();
 	private starting: Promise<void> | null = null;
 	private readonly threadWriteAccess = new Map<string, boolean>();
-	private readonly options: { command?: string; serviceName?: string };
+	private readonly options: {
+		command?: string;
+		serviceName?: string;
+		requestPermissionApproval?: (
+			request: PermissionApprovalRequest,
+		) => Promise<PermissionApprovalResult> | PermissionApprovalResult;
+	};
 
-	constructor(options: { command?: string; serviceName?: string } = {}) {
+	constructor(
+		options: {
+			command?: string;
+			serviceName?: string;
+			requestPermissionApproval?: (
+				request: PermissionApprovalRequest,
+			) => Promise<PermissionApprovalResult> | PermissionApprovalResult;
+		} = {},
+	) {
 		super();
 		this.options = options;
 	}
@@ -344,7 +434,7 @@ export class CodexAppServerClient extends EventEmitter {
 			return;
 		}
 		if (method === "item/permissions/requestApproval") {
-			respond({ permissions: {}, scope: "session" });
+			respond(await this.handlePermissionApprovalRequest(params));
 			return;
 		}
 		if (method === "item/tool/requestUserInput") {
@@ -356,6 +446,38 @@ export class CodexAppServerClient extends EventEmitter {
 			return;
 		}
 		respondError(-32601, `Unsupported server request: ${method}`);
+	}
+
+	private async handlePermissionApprovalRequest(
+		params: Record<string, unknown>,
+	): Promise<{ permissions: PermissionProfile; scope: PermissionGrantScope }> {
+		const request: PermissionApprovalRequest = {
+			threadId: typeof params.threadId === "string" ? params.threadId : "",
+			turnId: typeof params.turnId === "string" ? params.turnId : "",
+			itemId: typeof params.itemId === "string" ? params.itemId : "",
+			reason: typeof params.reason === "string" ? params.reason : null,
+			permissions: normalizePermissionProfile(params.permissions),
+			scope: normalizeScope(params.scope),
+		};
+		const fallbackScope = request.scope;
+		const onRequestApproval = this.options.requestPermissionApproval;
+		if (!onRequestApproval) {
+			return { permissions: {}, scope: fallbackScope };
+		}
+		try {
+			const decision = await onRequestApproval(request);
+			const scope = normalizeScope(decision.scope ?? fallbackScope);
+			if (!decision.approved) {
+				return { permissions: {}, scope };
+			}
+			return {
+				permissions: normalizePermissionProfile(decision.permissions ?? request.permissions),
+				scope,
+			};
+		} catch (error) {
+			console.error("[doe/codex] Permissions approval request failed", error);
+			return { permissions: {}, scope: fallbackScope };
+		}
 	}
 
 	private handleNotification(method: string, params: Record<string, unknown>) {
