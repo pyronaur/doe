@@ -14,7 +14,7 @@ import {
 } from "./doe-core.ts";
 import type { DoeExtensionContext } from "./doe-core.ts";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./plan/reminder.ts";
-import { runPlanReviewCli } from "./plan/review.ts";
+import { startPlanReviewCli } from "./plan/review.ts";
 import { clonePlanState } from "./plan/session-state.ts";
 import { evaluateReadGate } from "./read-gate.ts";
 import { loadMarkdownDocs, summarizeTemplates } from "./templates/loader.ts";
@@ -50,7 +50,7 @@ function registerRuntimeTools(
 		client: runtime.client,
 		registry: runtime.registry,
 		templatesDir: TEMPLATES_DIR,
-		reviewPlan: runPlanReviewCli,
+		startReviewPlan: startPlanReviewCli,
 		getSessionSlug,
 		getPlanState,
 		setPlanState: updatePlan,

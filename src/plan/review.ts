@@ -1,9 +1,19 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 export interface DoePlanReviewResult {
 	status: "approved" | "needs_revision";
 	feedback: string | null;
+}
+
+export interface DoePlanReviewJob {
+	reviewId: string;
+	planFilePath: string;
+	cwd: string;
+	requestedAt: number;
+	wait: Promise<DoePlanReviewResult>;
+	cancel: () => void;
 }
 
 interface PlannotatorReviewOutput {
@@ -15,11 +25,108 @@ interface PlannotatorReviewOutput {
 	};
 }
 
+interface StartPlanReviewInput {
+	reviewId?: string;
+	planFilePath: string;
+	cwd: string;
+}
+
+interface ReviewProcess {
+	wait: Promise<DoePlanReviewResult>;
+	cancel: () => void;
+}
+
+const planReviewJobs = new Map<string, DoePlanReviewJob>();
+
 function isPlannotatorOutput(value: unknown): value is PlannotatorReviewOutput {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		return false;
 	}
 	return true;
+}
+
+function spawnReviewProcess(input: {
+	reviewId: string;
+	payload: string;
+	cwd: string;
+}): ReviewProcess {
+	let cancel = () => {};
+	const wait = new Promise<DoePlanReviewResult>((resolve, reject) => {
+		const child = spawn("plannotator", [], {
+			cwd: input.cwd,
+			env: {
+				...process.env,
+				PLANNOTATOR_CWD: input.cwd,
+			},
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+
+		const finish = (handler: () => void) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			planReviewJobs.delete(input.reviewId);
+			handler();
+		};
+		const fail = (message: string) => finish(() => reject(new Error(message)));
+
+		cancel = () => {
+			child.kill("SIGTERM");
+			fail("Plannotator review was cancelled before a decision was captured.");
+		};
+
+		try {
+			child.stdin.write(input.payload);
+			child.stdin.end();
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			fail(`Failed to send plan content to Plannotator CLI: ${reason}`);
+			return;
+		}
+
+		child.stdout.on("data", (chunk) => {
+			stdout += String(chunk);
+		});
+		child.stderr.on("data", (chunk) => {
+			stderr += String(chunk);
+		});
+		child.on("error", (error) => {
+			fail(`Failed to start Plannotator CLI: ${error.message}`);
+		});
+		child.on("close", (code, signal) => {
+			finish(() => {
+				if (code === 0) {
+					try {
+						resolve(parsePlannotatorReviewResult(stdout));
+						return;
+					} catch (error) {
+						const reason = error instanceof Error ? error.message : String(error);
+						reject(new Error(`Plannotator review returned an invalid decision: ${reason}`));
+						return;
+					}
+				}
+				const reason = stderr.trim() || stdout.trim()
+					|| `exit code ${code ?? "null"}, signal ${signal ?? "null"}`;
+				reject(new Error(`Plannotator CLI review failed: ${reason}`));
+			});
+		});
+	});
+	return {
+		wait,
+		cancel: () => cancel(),
+	};
+}
+
+export function buildPlannotatorRequest(planFilePath: string): string {
+	return JSON.stringify({
+		tool_input: {
+			plan: readFileSync(planFilePath, "utf-8"),
+		},
+	});
 }
 
 export function parsePlannotatorReviewResult(stdout: string): DoePlanReviewResult {
@@ -32,32 +139,51 @@ export function parsePlannotatorReviewResult(stdout: string): DoePlanReviewResul
 	if (!isPlannotatorOutput(parsed)) {
 		throw new Error("Plannotator review output did not include a decision.");
 	}
-	const output = parsed;
-
-	const behavior = output.hookSpecificOutput?.decision?.behavior;
+	const behavior = parsed.hookSpecificOutput?.decision?.behavior;
 	if (behavior === "allow") {
 		return {
 			status: "approved",
 			feedback: null,
 		};
 	}
-
 	if (behavior === "deny") {
 		return {
 			status: "needs_revision",
-			feedback: output.hookSpecificOutput?.decision?.message ?? "",
+			feedback: parsed.hookSpecificOutput?.decision?.message ?? "",
 		};
 	}
-
 	throw new Error("Plannotator review output did not include a decision.");
 }
 
-export function buildPlannotatorRequest(planFilePath: string): string {
-	return JSON.stringify({
-		tool_input: {
-			plan: readFileSync(planFilePath, "utf-8"),
-		},
+export function getPlanReviewJob(reviewId: string): DoePlanReviewJob | null {
+	return planReviewJobs.get(reviewId) ?? null;
+}
+
+export const hasPlanReviewJob: (reviewId: string) => boolean = planReviewJobs.has.bind(
+	planReviewJobs,
+);
+
+export function startPlanReviewCli(input: StartPlanReviewInput): DoePlanReviewJob {
+	const reviewId = input.reviewId?.trim() || randomUUID();
+	const existing = planReviewJobs.get(reviewId);
+	if (existing) {
+		return existing;
+	}
+	const process = spawnReviewProcess({
+		reviewId,
+		payload: buildPlannotatorRequest(input.planFilePath),
+		cwd: input.cwd,
 	});
+	const job: DoePlanReviewJob = {
+		reviewId,
+		planFilePath: input.planFilePath,
+		cwd: input.cwd,
+		requestedAt: Date.now(),
+		wait: process.wait,
+		cancel: () => process.cancel(),
+	};
+	planReviewJobs.set(reviewId, job);
+	return job;
 }
 
 export async function runPlanReviewCli(input: {
@@ -65,75 +191,37 @@ export async function runPlanReviewCli(input: {
 	cwd: string;
 	signal?: AbortSignal;
 }): Promise<DoePlanReviewResult> {
-	const payload = buildPlannotatorRequest(input.planFilePath);
-
-	return new Promise((resolve, reject) => {
-		const child = spawn("plannotator", [], {
-			cwd: input.cwd,
-			env: {
-				...process.env,
-				PLANNOTATOR_CWD: input.cwd,
-			},
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-
-		let stdout = "";
-		let stderr = "";
-		let settled = false;
-
-		const cleanup = () => {
-			input.signal?.removeEventListener("abort", handleAbort);
-		};
-
-		const finish = (handler: () => void) => {
-			if (settled) { return; }
-			settled = true;
+	const job = startPlanReviewCli({
+		planFilePath: input.planFilePath,
+		cwd: input.cwd,
+	});
+	const signal = input.signal;
+	if (!signal) {
+		return await job.wait;
+	}
+	if (signal.aborted) {
+		job.cancel();
+		throw new Error("Plannotator review was cancelled before a decision was captured.");
+	}
+	return await new Promise((resolve, reject) => {
+		const onAbort = () => {
+			job.cancel();
 			cleanup();
-			handler();
+			reject(new Error("Plannotator review was cancelled before a decision was captured."));
 		};
-
-		const handleAbort = () => {
-			child.kill("SIGTERM");
-			finish(() =>
-				reject(new Error("Plannotator review was cancelled before a decision was captured."))
-			);
+		const cleanup = () => {
+			signal.removeEventListener("abort", onAbort);
 		};
-
-		input.signal?.addEventListener("abort", handleAbort, { once: true });
-
-		child.stdin.write(payload);
-		child.stdin.end();
-		child.stdout.on("data", (chunk) => {
-			stdout += String(chunk);
-		});
-		child.stderr.on("data", (chunk) => {
-			stderr += String(chunk);
-		});
-		child.on("error", (error) => {
-			finish(() => reject(new Error(`Failed to start Plannotator CLI: ${error.message}`)));
-		});
-		child.on("close", (code, signal) => {
-			finish(() => {
-				if (code === 0) {
-					try {
-						resolve(parsePlannotatorReviewResult(stdout));
-						return;
-					} catch (error) {
-						reject(
-							new Error(
-								`Plannotator review returned an invalid decision: ${
-									error instanceof Error ? error.message : String(error)
-								}`,
-							),
-						);
-						return;
-					}
-					return;
-				}
-				const reason = stderr.trim() || stdout.trim()
-					|| `exit code ${code ?? "null"}, signal ${signal ?? "null"}`;
-				reject(new Error(`Plannotator CLI review failed: ${reason}`));
-			});
-		});
+		signal.addEventListener("abort", onAbort, { once: true });
+		job.wait.then(
+			(result) => {
+				cleanup();
+				resolve(result);
+			},
+			(error) => {
+				cleanup();
+				reject(error);
+			},
+		);
 	});
 }

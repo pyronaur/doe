@@ -38,6 +38,10 @@ const PROBE_SCRIPT = `
 
 	mock.module("./src/plan/review.ts", () => ({
 		runPlanReviewCli: async () => ({ status: "approved", feedback: null }),
+		startPlanReviewCli: () => ({
+			reviewId: "review-1",
+			wait: Promise.resolve({ status: "approved", feedback: null }),
+		}),
 	}));
 
 	mock.module("./src/plan/reminder.ts", () => ({

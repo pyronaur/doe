@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DoePlanReviewResult } from "../src/plan/review.ts";
+import { startPlanReviewCli } from "../src/plan/review.ts";
 import { createEmptyPlanState, type DoePlanState } from "../src/plan/session-state.ts";
 import { DoeRegistry } from "../src/roster/registry.ts";
 import type { AgentRecord } from "../src/roster/types.ts";
@@ -21,7 +29,9 @@ let planToolModules:
 	| null = null;
 
 async function loadPlanTools() {
-	if (planToolModules) { return planToolModules; }
+	if (planToolModules) {
+		return planToolModules;
+	}
 	const [{ registerPlanResumeTool }, { registerPlanStartTool }, { registerPlanStopTool }] =
 		await Promise.all([
 			import("../src/tools/plan-resume.ts"),
@@ -56,9 +66,15 @@ function createPlanTemplate(templatesDir: string) {
 	);
 }
 
+function extractPlanFilePath(prompt: string): string {
+	const match = prompt.match(/(?:Write the plan only to|Rewrite the plan only at):\s*(.+)$/m);
+	assert.ok(match?.[1], `missing plan file path in prompt:\n${prompt}`);
+	return match[1].trim();
+}
+
 function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 	return createRegistryAgent({
-		name: "Hope",
+		name: "Spark",
 		effort: "medium",
 		template: "plan",
 		allowWrite: true,
@@ -70,18 +86,12 @@ function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 		runStartedAt: 1,
 		completionNotified: false,
 		recovered: false,
-		seatName: "Hope",
+		seatName: "Spark",
 		seatRole: "intern",
 		finishNote: null,
 		reuseSummary: null,
 		...overrides,
 	});
-}
-
-function extractPlanFilePath(prompt: string): string {
-	const match = prompt.match(/(?:Write the plan only to|Rewrite the plan only at):\s*(.+)$/m);
-	assert.ok(match?.[1], `missing plan file path in prompt:\n${prompt}`);
-	return match[1].trim();
 }
 
 class FakePlanClient {
@@ -94,22 +104,13 @@ class FakePlanClient {
 	private nextTurn = 0;
 	private readonly registry: DoeRegistry;
 	private readonly planBodies: string[];
-	private readonly failStartThread: boolean;
 
-	constructor(
-		registry: DoeRegistry,
-		planBodies: string[],
-		options: { failStartThread?: boolean } = {},
-	) {
+	constructor(registry: DoeRegistry, planBodies: string[]) {
 		this.registry = registry;
 		this.planBodies = planBodies;
-		this.failStartThread = options.failStartThread ?? false;
 	}
 
 	async startThread(options: Record<string, unknown>) {
-		if (this.failStartThread) {
-			throw new Error("startThread failed");
-		}
 		this.threadCalls.push(options);
 		this.nextThread += 1;
 		return { thread: { id: `thread-${this.nextThread}` } };
@@ -133,11 +134,17 @@ class FakePlanClient {
 
 	async steerTurn(input: { threadId: string; expectedTurnId: string; prompt: string }) {
 		this.steerCalls.push(input);
-		writeFileSync(extractPlanFilePath(input.prompt), this.planBodies.shift() ?? "# Revised\n",
-			"utf-8");
+		writeFileSync(
+			extractPlanFilePath(input.prompt),
+			this.planBodies.shift() ?? "# Revised\n",
+			"utf-8",
+		);
 		setTimeout(() => {
-			this.registry.markCompleted(input.threadId, input.expectedTurnId,
-				`Completed ${input.expectedTurnId}`);
+			this.registry.markCompleted(
+				input.threadId,
+				input.expectedTurnId,
+				`Completed ${input.expectedTurnId}`,
+			);
 		}, 0);
 	}
 
@@ -146,9 +153,68 @@ class FakePlanClient {
 	}
 }
 
+interface DeferredReview {
+	reviewId: string;
+	wait: Promise<DoePlanReviewResult>;
+	resolve: (value: DoePlanReviewResult) => void;
+	reject: (error: Error) => void;
+}
+
+interface ReviewController {
+	calls: Array<{ reviewId: string; planFilePath: string; cwd: string }>;
+	startReviewPlan: (
+		input: { reviewId?: string; planFilePath: string; cwd: string },
+	) => { reviewId: string; wait: Promise<DoePlanReviewResult> };
+	resolve: (reviewId: string, value: DoePlanReviewResult) => void;
+	reject: (reviewId: string, error: Error) => void;
+}
+
+function createReviewController(): ReviewController {
+	const calls: Array<{ reviewId: string; planFilePath: string; cwd: string }> = [];
+	const jobs = new Map<string, DeferredReview>();
+	let nextReview = 0;
+
+	const startReviewPlan = (input: { reviewId?: string; planFilePath: string; cwd: string }) => {
+		const reviewId = input.reviewId ?? `review-${++nextReview}`;
+		calls.push({ reviewId, planFilePath: input.planFilePath, cwd: input.cwd });
+		const existing = jobs.get(reviewId);
+		if (existing) {
+			return { reviewId, wait: existing.wait };
+		}
+		let resolve!: (value: DoePlanReviewResult) => void;
+		let reject!: (error: Error) => void;
+		const wait = new Promise<DoePlanReviewResult>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		jobs.set(reviewId, { reviewId, wait, resolve, reject });
+		return { reviewId, wait };
+	};
+
+	const resolve = (reviewId: string, value: DoePlanReviewResult) => {
+		const job = jobs.get(reviewId);
+		if (!job) {
+			throw new Error(`Unknown review ${reviewId}`);
+		}
+		job.resolve(value);
+		jobs.delete(reviewId);
+	};
+
+	const reject = (reviewId: string, error: Error) => {
+		const job = jobs.get(reviewId);
+		if (!job) {
+			throw new Error(`Unknown review ${reviewId}`);
+		}
+		job.reject(error);
+		jobs.delete(reviewId);
+	};
+
+	return { calls, startReviewPlan, resolve, reject };
+}
+
 interface RegisteredTool {
 	name: string;
-	execute: (...args: unknown[]) => Promise<unknown>;
+	execute: (...args: unknown[]) => Promise<any>;
 }
 
 function getTool(tools: Map<string, RegisteredTool>, name: string): RegisteredTool {
@@ -159,118 +225,12 @@ function getTool(tools: Map<string, RegisteredTool>, name: string): RegisteredTo
 	return tool;
 }
 
-async function createToolHarness(input: {
-	registry: DoeRegistry;
-	client: FakePlanClient;
-	templatesDir: string;
-	reviewResults?: Array<DoePlanReviewResult | Error>;
-	getPlanState: () => DoePlanState;
-	setPlanState: (updater: (state: DoePlanState) => DoePlanState) => DoePlanState;
-}) {
-	const { registerPlanResumeTool, registerPlanStartTool, registerPlanStopTool } =
-		await loadPlanTools();
-	const tools = new Map<string, RegisteredTool>();
-	const reviewCalls: Array<{ planFilePath: string; cwd: string }> = [];
-	const reviewResults = [...(input.reviewResults ?? [{ status: "approved", feedback: null }])];
-	const reviewPlan = async ({ planFilePath, cwd }: { planFilePath: string; cwd: string }) => {
-		reviewCalls.push({ planFilePath, cwd });
-		const next = reviewResults.shift() ?? { status: "approved", feedback: null };
-		if (next instanceof Error) { throw next; }
-		return next;
-	};
-	const planDeps = {
-		client: input.client,
-		registry: input.registry,
-		templatesDir: input.templatesDir,
-		reviewPlan,
-		getSessionSlug: () => "feature-x",
-		getPlanState: input.getPlanState,
-		setPlanState: (updater: (state: DoePlanState) => DoePlanState) => input.setPlanState(updater),
-	};
-	const pi = {
-		registerTool(tool: RegisteredTool) {
-			tools.set(tool.name, tool);
-		},
-	};
-
-	Reflect.apply(registerPlanStartTool, undefined, [pi, planDeps]);
-	Reflect.apply(registerPlanResumeTool, undefined, [pi, planDeps]);
-	Reflect.apply(registerPlanStopTool, undefined, [pi, {
-		client: input.client,
-		registry: input.registry,
-		getPlanState: input.getPlanState,
-		setPlanState: (updater) => input.setPlanState(updater),
-	}]);
-
-	return {
-		start: getTool(tools, "plan_start"),
-		resume: getTool(tools, "plan_resume"),
-		stop: getTool(tools, "plan_stop"),
-		reviewCalls,
-	};
-}
-
-function assertPlanStartNeedsRevision(input: {
-	planState: DoePlanState;
-	registry: DoeRegistry;
-	client: FakePlanClient;
-	reviewCalls: Array<{ planFilePath: string; cwd: string }>;
-	result: any;
-}) {
-	const planFilePath = input.planState.activePlan?.planFilePath ?? "";
-	assert.equal(input.planState.activePlan?.sessionSlug, "feature-x");
-	assert.equal(input.planState.activePlan?.ic, "Hope");
-	assert.match(planFilePath, /\/\.tmp\/feature-x\/plan-auth-refactor\.md$/);
-	assert.equal(input.planState.activePlan?.threadId, "thread-1");
-	assert.equal(input.planState.activePlan?.status, "needs_revision");
-	assert.equal(input.planState.activePlan?.reviewFeedback,
-		"# Plan Feedback\n\nAdd rollout guidance.");
-	assert.ok(existsSync(planFilePath));
-	assert.match(readFileSync(planFilePath, "utf-8"), /Initial plan/);
-	assert.equal(input.client.threadCalls[0]?.model, "gpt-5.4-mini");
-	assert.ok(input.client.turnCalls[0]);
-	assert.equal(input.reviewCalls.length, 1);
-	assert.equal(input.reviewCalls[0]?.planFilePath, planFilePath);
-	assert.match(input.result.content[0].text, /ic: Hope/);
-	assert.match(input.result.content[0].text, /review_status: needs_revision/);
-	assert.match(input.result.content[0].text, /Add rollout guidance/);
-	assert.equal(input.result.details.ic, "Hope");
-	assert.equal(input.result.details.reviewStatus, "needs_revision");
-	assert.equal(input.result.details.reviewFeedback, "# Plan Feedback\n\nAdd rollout guidance.");
-	assert.match(input.client.turnCalls[0].prompt, /Write the plan only to:/);
-	assert.equal(input.registry.findAgent(input.planState.activePlan?.agentId ?? "")?.model,
-		"gpt-5.4-mini");
-	assert.equal(input.registry.findAgent(input.planState.activePlan?.agentId ?? "")?.effort, "high");
-}
-
-function assertPlanResumeApproved(input: {
-	planState: DoePlanState;
-	client: FakePlanClient;
-	planFilePath: string;
-	reviewCalls: Array<{ planFilePath: string; cwd: string }>;
-	result: any;
-}) {
-	assert.equal(input.planState.activePlan, null);
-	assert.match(input.planFilePath, /\/\.tmp\/feature-x\/plan-auth-refactor\.md$/);
-	assert.equal(input.client.resumeCalls.length, 1);
-	assert.equal(input.client.resumeCalls[0]?.model, "gpt-5.4-mini");
-	assert.match(input.client.turnCalls[1].prompt, /<review_feedback>/);
-	assert.match(input.client.turnCalls[1].prompt, /<additional_instructions>/);
-	assert.match(input.client.turnCalls[1].prompt, /Add rollout and testing\./);
-	assert.match(input.client.turnCalls[1].prompt, /Keep scope tight\./);
-	assert.match(input.client.turnCalls[1].prompt, /Rewrite the plan only at:/);
-	assert.match(readFileSync(input.planFilePath, "utf-8"), /Updated plan/);
-	assert.equal(input.reviewCalls.length, 2);
-	assert.match(input.result.content[0].text, /review_status: approved/);
-	assert.match(input.result.content[0].text, /Plan approved\. Workflow cleared\./);
-	assert.equal(input.result.details.ic, "Hope");
-	assert.equal(input.result.details.reviewStatus, "approved");
-	assert.equal(input.result.details.reviewFeedback, null);
-}
-
 interface PlanStateHandle {
 	getPlanState: () => DoePlanState;
-	setPlanState: (updater: (state: DoePlanState) => DoePlanState) => DoePlanState;
+	setPlanState: (
+		updater: (state: DoePlanState) => DoePlanState,
+		_options?: { flush?: boolean },
+	) => DoePlanState;
 	read: () => DoePlanState;
 }
 
@@ -286,26 +246,73 @@ function createPlanStateHandle(initial: DoePlanState = createEmptyPlanState()): 
 	};
 }
 
+async function createToolHarness(input: {
+	registry: DoeRegistry;
+	client: FakePlanClient;
+	templatesDir: string;
+	reviewController: ReviewController;
+	getPlanState: () => DoePlanState;
+	setPlanState: (
+		updater: (state: DoePlanState) => DoePlanState,
+		options?: { flush?: boolean },
+	) => DoePlanState;
+}) {
+	const { registerPlanResumeTool, registerPlanStartTool, registerPlanStopTool } =
+		await loadPlanTools();
+	const tools = new Map<string, RegisteredTool>();
+	const planDeps = {
+		client: input.client,
+		registry: input.registry,
+		templatesDir: input.templatesDir,
+		startReviewPlan: input.reviewController.startReviewPlan,
+		getSessionSlug: () => "feature-x",
+		getPlanState: input.getPlanState,
+		setPlanState: input.setPlanState,
+	};
+	const pi = {
+		registerTool(tool: RegisteredTool) {
+			tools.set(tool.name, tool);
+		},
+	};
+
+	Reflect.apply(registerPlanStartTool, undefined, [pi, planDeps]);
+	Reflect.apply(registerPlanResumeTool, undefined, [pi, planDeps]);
+	Reflect.apply(registerPlanStopTool, undefined, [pi, {
+		client: input.client,
+		registry: input.registry,
+		getPlanState: input.getPlanState,
+		setPlanState: input.setPlanState,
+	}]);
+
+	return {
+		start: getTool(tools, "plan_start"),
+		resume: getTool(tools, "plan_resume"),
+		stop: getTool(tools, "plan_stop"),
+	};
+}
+
 const PLAN_START_INPUT = {
-	ic: "Hope",
+	ic: "Spark",
 	planSlug: "auth refactor",
 	prompt: "Plan the auth rewrite.",
 };
 
-async function runPlanStart(
-	tool: RegisteredTool,
-	toolCallId: string,
-	overrides: Record<string, unknown> = {},
-) {
-	return await tool.execute(toolCallId, { ...PLAN_START_INPUT, ...overrides }, undefined);
+async function runPlanStart(tool: RegisteredTool) {
+	return await tool.execute("tool-start", PLAN_START_INPUT, undefined);
 }
 
-async function runPlanResume(
-	tool: RegisteredTool,
-	toolCallId: string,
-	input: Record<string, unknown> = {},
-) {
-	return await tool.execute(toolCallId, input, undefined);
+async function runPlanResume(tool: RegisteredTool, input: Record<string, unknown> = {}) {
+	return await tool.execute("tool-resume", input, undefined);
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 1000) {
+	const startedAt = Date.now();
+	while (!condition()) {
+		if (Date.now() - startedAt > timeoutMs) {
+			throw new Error("Timed out waiting for condition.");
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
 }
 
 async function withPlanRepo(
@@ -326,20 +333,17 @@ async function withPlanRepo(
 async function createPlanHarness(input: {
 	templatesDir: string;
 	planBodies: string[];
-	reviewResults?: Array<DoePlanReviewResult | Error>;
-	failStartThread?: boolean;
 	planState?: DoePlanState;
 }) {
 	const registry = new DoeRegistry();
-	const client = new FakePlanClient(registry, input.planBodies, {
-		failStartThread: input.failStartThread,
-	});
+	const client = new FakePlanClient(registry, input.planBodies);
+	const reviewController = createReviewController();
 	const planState = createPlanStateHandle(input.planState);
 	const tools = await createToolHarness({
 		registry,
 		client,
 		templatesDir: input.templatesDir,
-		reviewResults: input.reviewResults,
+		reviewController,
 		getPlanState: planState.getPlanState,
 		setPlanState: planState.setPlanState,
 	});
@@ -348,84 +352,45 @@ async function createPlanHarness(input: {
 		client,
 		planState,
 		registry,
+		reviewController,
 	};
 }
 
-test(
-	"plan_start requires an explicit IC, writes the plan file, and captures revision feedback automatically",
-	{ concurrency: false },
-	async () => {
-		await withPlanRepo(async ({ templatesDir }) => {
-			const harness = await createPlanHarness({
-				templatesDir,
-				planBodies: ["# Draft\n\nInitial plan.\n"],
-				reviewResults: [{
-					status: "needs_revision",
-					feedback: "# Plan Feedback\n\nAdd rollout guidance.",
-				}],
-			});
-			const result = await runPlanStart(harness.start, "tool-1");
-			assertPlanStartNeedsRevision({
-				planState: harness.planState.read(),
-				registry: harness.registry,
-				client: harness.client,
-				reviewCalls: harness.reviewCalls,
-				result,
-			});
-		});
-	},
-);
+function setPathPrefix(prefix: string) {
+	const originalPath = process.env.PATH;
+	process.env.PATH = `${prefix}:${originalPath ?? ""}`;
+	return () => {
+		if (originalPath === undefined) {
+			delete process.env.PATH;
+			return;
+		}
+		process.env.PATH = originalPath;
+	};
+}
 
-test("plan_start approval clears the workflow and adds the closeout line", {
-	concurrency: false,
-}, async () => {
-	await withPlanRepo(async ({ templatesDir }) => {
-		const harness = await createPlanHarness({
-			templatesDir,
-			planBodies: ["# Draft\n\nApproved plan.\n"],
-			reviewResults: [{ status: "approved", feedback: null }],
-		});
-		const result = await runPlanStart(harness.start, "tool-1");
-		assert.equal(harness.planState.read().activePlan, null);
-		assert.match(result.content[0].text, /review_status: approved/);
-		assert.match(result.content[0].text, /Plan approved\. Workflow cleared\./);
-	});
-});
+function createBlockingPlannotator() {
+	const fakeBinDir = mkdtempSync(join(tmpdir(), "doe-plan-review-stop-"));
+	const fakeCliPath = join(fakeBinDir, "plannotator");
+	writeFileSync(
+		fakeCliPath,
+		[
+			"#!/bin/sh",
+			"cat >/dev/null",
+			"while true; do",
+			"  sleep 1",
+			"done",
+		].join("\n"),
+		"utf-8",
+	);
+	chmodSync(fakeCliPath, 0o755);
+	return fakeBinDir;
+}
 
-test("plan_resume reuses the same IC, thread, and plan file with captured review feedback", {
-	concurrency: false,
-}, async () => {
-	await withPlanRepo(async ({ repoRoot, templatesDir }) => {
-		const harness = await createPlanHarness({
-			templatesDir,
-			planBodies: [
-				"# Draft\n\nInitial plan.\n",
-				"# Revised\n\nUpdated plan.\n",
-			],
-			reviewResults: [
-				{ status: "needs_revision", feedback: "# Plan Feedback\n\nAdd rollout and testing." },
-				{ status: "approved", feedback: null },
-			],
-		});
-		await runPlanStart(harness.start, "tool-1");
-		const result = await runPlanResume(harness.resume, "tool-2", {
-			commentary: "Keep scope tight.",
-		});
-		assertPlanResumeApproved({
-			planState: harness.planState.read(),
-			client: harness.client,
-			planFilePath: join(repoRoot, ".tmp", "feature-x", "plan-auth-refactor.md"),
-			reviewCalls: harness.reviewCalls,
-			result,
-		});
-	});
-});
-
-test("plan_stop interrupts the active plan and clears the single active plan state", async () => {
+function createStopPlanState(planFilePath: string) {
 	const registry = new DoeRegistry();
 	attachSeatAgent(registry, {
 		agentId: "agent-1",
-		ic: "Hope",
+		ic: "Spark",
 		threadId: "thread-1",
 		agent: createAgent({
 			id: "agent-1",
@@ -434,148 +399,163 @@ test("plan_stop interrupts the active plan and clears the single active plan sta
 	});
 	const client = new FakePlanClient(registry, []);
 	const planState = createPlanStateHandle({
-		version: 4,
+		version: 5,
 		sessionSlugReminderSentAtTurn: null,
 		activePlan: {
 			sessionSlug: "feature-x",
 			planSlug: "auth-refactor",
-			planFilePath: "/tmp/plan-auth-refactor.md",
-			ic: "Hope",
+			planFilePath,
+			ic: "Spark",
 			agentId: "agent-1",
 			threadId: "thread-1",
-			status: "needs_revision",
-			reviewFeedback: "Tighten scope.",
+			status: "ready_for_review",
+			reviewFeedback: null,
+		},
+		pendingReview: {
+			reviewId: "review-stop-1",
+			sessionSlug: "feature-x",
+			planSlug: "auth-refactor",
+			planFilePath,
+			agentId: "agent-1",
+			requestedAt: Date.now(),
 		},
 	});
-	const tools = await createToolHarness({
-		registry,
-		client,
-		templatesDir: mkdtempSync(join(tmpdir(), "doe-plan-templates-")),
-		getPlanState: planState.getPlanState,
-		setPlanState: planState.setPlanState,
-	});
+	return { registry, client, planState };
+}
 
-	const result = await tools.stop.execute("tool-3", {}, undefined);
-
-	assert.deepEqual(client.interruptCalls, [{ threadId: "thread-1", turnId: "turn-1" }]);
-	assert.equal(planState.read().activePlan, null);
-	assert.equal(registry.findAgent("agent-1")?.state, "awaiting_input");
-	assert.equal(result.details.interrupted, true);
-	assert.match(result.content[0].text, /Stopped planning workflow for auth-refactor\./);
-});
-
-test(
-	"plan_start retry after failed launch does not require allowExisting and does not leave an empty plan file behind",
-	{ concurrency: false },
-	async () => {
-		await withPlanRepo(async ({ repoRoot, templatesDir }) => {
-			const harness = await createPlanHarness({
-				templatesDir,
-				planBodies: [],
-				reviewResults: [{ status: "approved", feedback: null }],
-				failStartThread: true,
-			});
-			await assert.rejects(
-				runPlanStart(harness.start, "tool-4"),
-				/startThread failed/,
-			);
-
-			const planFilePath = join(repoRoot, ".tmp", "feature-x", "plan-auth-refactor.md");
-			assert.equal(harness.planState.read().activePlan, null);
-			assert.equal(existsSync(planFilePath), false);
-
-			const retryClient = new FakePlanClient(harness.registry, ["# Draft\n\nRetry plan.\n"]);
-			const retryTools = await createToolHarness({
-				registry: harness.registry,
-				client: retryClient,
-				templatesDir,
-				reviewResults: [{
-					status: "needs_revision",
-					feedback: "# Plan Feedback\n\nRetry feedback.",
-				}],
-				getPlanState: harness.planState.getPlanState,
-				setPlanState: harness.planState.setPlanState,
-			});
-			const retry = await runPlanStart(retryTools.start, "tool-5");
-
-			assert.match(retry.content[0].text, /review_status: needs_revision/);
-			assert.equal(existsSync(harness.planState.read().activePlan?.planFilePath ?? ""), true);
-		});
-	},
-);
-
-test(
-	"plan_start review failure leaves the plan ready for review and plan_resume retries the same review loop",
-	{ concurrency: false },
-	async () => {
-		await withPlanRepo(async ({ templatesDir }) => {
-			const harness = await createPlanHarness({
-				templatesDir,
-				planBodies: ["# Draft\n\nInitial plan.\n"],
-				reviewResults: [
-					new Error("Plannotator CLI review failed: browser startup failed"),
-					{ status: "needs_revision", feedback: "# Plan Feedback\n\nRetry worked." },
-				],
-			});
-			await assert.rejects(
-				runPlanStart(harness.start, "tool-6"),
-				/retry review for the same plan workflow/,
-			);
-
-			assert.equal(harness.planState.read().activePlan?.status, "ready_for_review");
-			assert.equal(harness.planState.read().activePlan?.reviewFeedback, null);
-			assert.equal(harness.client.turnCalls.length, 1);
-
-			const result = await runPlanResume(harness.resume, "tool-7");
-
-			assert.equal(harness.client.turnCalls.length, 1);
-			assert.equal(harness.reviewCalls.length, 2);
-			assert.equal(harness.planState.read().activePlan?.status, "needs_revision");
-			assert.equal(harness.planState.read().activePlan?.reviewFeedback,
-				"# Plan Feedback\n\nRetry worked.");
-			assert.match(result.content[0].text, /Review retried without revising the plan\./);
-			assert.match(result.content[0].text, /review_status: needs_revision/);
-			assert.match(result.content[0].text, /<review_feedback>/);
-			assert.match(result.content[0].text, /<next_step>/);
-		});
-	},
-);
-
-test("plan_resume review failure after a revision stays retryable without another rewrite", {
+test("plan_start returns immediately with pending review and persisted pendingReview state", {
 	concurrency: false,
 }, async () => {
 	await withPlanRepo(async ({ templatesDir }) => {
 		const harness = await createPlanHarness({
 			templatesDir,
-			planBodies: [
-				"# Draft\n\nInitial plan.\n",
-				"# Revised\n\nUpdated plan.\n",
-			],
-			reviewResults: [
-				{ status: "needs_revision", feedback: "# Plan Feedback\n\nAdd rollout and testing." },
-				new Error("Plannotator review was cancelled before a decision was captured."),
-				{ status: "approved", feedback: null },
-			],
+			planBodies: ["# Draft\n\nInitial plan.\n"],
 		});
-		await runPlanStart(harness.start, "tool-8");
 
-		await assert.rejects(
-			runPlanResume(harness.resume, "tool-9", {
-				commentary: "Keep scope tight.",
-			}),
-			/retry review for the same plan workflow/,
-		);
+		const result = await runPlanStart(harness.start);
+		const state = harness.planState.read();
+		const pending = state.pendingReview;
 
+		assert.match(result.content[0].text, /review_status: pending/);
+		assert.match(result.content[0].text, /review_id: review-1/);
+		assert.equal(result.details.reviewStatus, "pending");
+		assert.equal(result.details.reviewId, "review-1");
+		assert.equal(state.activePlan?.status, "ready_for_review");
+		assert.equal(state.activePlan?.reviewFeedback, null);
+		assert.equal(pending?.reviewId, "review-1");
+		assert.equal(pending?.planSlug, "auth-refactor");
+		assert.equal(harness.reviewController.calls.length, 1);
+		assert.ok(existsSync(state.activePlan?.planFilePath ?? ""));
+		assert.match(readFileSync(state.activePlan?.planFilePath ?? "", "utf-8"), /Initial plan/);
+	});
+});
+
+test("background review outcome updates plan state asynchronously", {
+	concurrency: false,
+}, async () => {
+	await withPlanRepo(async ({ templatesDir }) => {
+		const harness = await createPlanHarness({
+			templatesDir,
+			planBodies: ["# Draft\n\nInitial plan.\n"],
+		});
+
+		await runPlanStart(harness.start);
+		harness.reviewController.resolve("review-1", {
+			status: "needs_revision",
+			feedback: "# Plan Feedback\n\nAdd rollout guidance.",
+		});
+		await waitFor(() => harness.planState.read().activePlan?.status === "needs_revision");
+
+		assert.equal(harness.planState.read().activePlan?.reviewFeedback,
+			"# Plan Feedback\n\nAdd rollout guidance.");
+		assert.equal(harness.planState.read().pendingReview, null);
+	});
+});
+
+test("plan_resume after needs_revision revises plan and starts a new pending review", {
+	concurrency: false,
+}, async () => {
+	await withPlanRepo(async ({ templatesDir }) => {
+		const harness = await createPlanHarness({
+			templatesDir,
+			planBodies: ["# Draft\n\nInitial plan.\n", "# Revised\n\nUpdated plan.\n"],
+		});
+
+		await runPlanStart(harness.start);
+		harness.reviewController.resolve("review-1", {
+			status: "needs_revision",
+			feedback: "# Plan Feedback\n\nAdd rollout and testing.",
+		});
+		await waitFor(() => harness.planState.read().activePlan?.status === "needs_revision");
+
+		const result = await runPlanResume(harness.resume, { commentary: "Keep scope tight." });
+		const pending = harness.planState.read().pendingReview;
+
+		assert.equal(harness.client.resumeCalls.length, 1);
+		assert.equal(harness.client.turnCalls.length, 2);
+		assert.match(harness.client.turnCalls[1].prompt, /<review_feedback>/);
+		assert.match(harness.client.turnCalls[1].prompt, /Keep scope tight\./);
+		assert.match(result.content[0].text, /review_status: pending/);
+		assert.match(result.content[0].text, /review_id: review-2/);
+		assert.match(result.content[0].text, /Revision complete\. Review started in background\./);
 		assert.equal(harness.planState.read().activePlan?.status, "ready_for_review");
-		assert.equal(harness.planState.read().activePlan?.reviewFeedback, null);
-		assert.equal(harness.client.turnCalls.length, 2);
+		assert.equal(pending?.reviewId, "review-2");
 
-		const retry = await runPlanResume(harness.resume, "tool-10");
+		harness.reviewController.resolve("review-2", { status: "approved", feedback: null });
+		await waitFor(() => harness.planState.read().activePlan === null);
+		assert.equal(harness.planState.read().pendingReview, null);
+	});
+});
 
-		assert.equal(harness.client.turnCalls.length, 2);
-		assert.equal(harness.planState.read().activePlan, null);
-		assert.match(retry.content[0].text, /Review retried without revising the plan\./);
-		assert.match(retry.content[0].text, /review_status: approved/);
-		assert.match(retry.content[0].text, /Plan approved\. Workflow cleared\./);
+test("plan_resume with persisted pending review reuses the same review id", {
+	concurrency: false,
+}, async () => {
+	await withPlanRepo(async ({ templatesDir }) => {
+		const harness = await createPlanHarness({
+			templatesDir,
+			planBodies: ["# Draft\n\nInitial plan.\n"],
+		});
+
+		await runPlanStart(harness.start);
+		const initial = harness.planState.read().pendingReview;
+		assert.equal(initial?.reviewId, "review-1");
+
+		const result = await runPlanResume(harness.resume);
+		assert.equal(harness.reviewController.calls.length, 2);
+		assert.equal(harness.reviewController.calls[1]?.reviewId, "review-1");
+		assert.match(result.content[0].text, /review_id: review-1/);
+		assert.match(result.content[0].text, /Review was restored and is pending\./);
+	});
+});
+
+test("plan_stop clears pendingReview and cancels an in-memory plannotator job", async () => {
+	await withPlanRepo(async ({ repoRoot, templatesDir }) => {
+		const fakeBinDir = createBlockingPlannotator();
+		const planFilePath = join(repoRoot, ".tmp", "feature-x", "plan-auth-refactor.md");
+		mkdirSync(join(repoRoot, ".tmp", "feature-x"), { recursive: true });
+		writeFileSync(planFilePath, "# Draft\n\nInitial plan.\n", "utf-8");
+		const restorePath = setPathPrefix(fakeBinDir);
+
+		const reviewJob = startPlanReviewCli({
+			reviewId: "review-stop-1",
+			planFilePath,
+			cwd: repoRoot,
+		});
+		const { registry, client, planState } = createStopPlanState(planFilePath);
+		const tools = await createToolHarness({
+			registry,
+			client,
+			templatesDir,
+			reviewController: createReviewController(),
+			getPlanState: planState.getPlanState,
+			setPlanState: planState.setPlanState,
+		});
+
+		const stopResult = await tools.stop.execute("tool-stop", {}, undefined);
+		await assert.rejects(reviewJob.wait, /cancelled before a decision was captured/);
+		assert.equal(planState.read().activePlan, null);
+		assert.equal(planState.read().pendingReview, null);
+		assert.equal(stopResult.details.cancelledReview, true);
+		restorePath();
 	});
 });

@@ -1,7 +1,7 @@
 import { isRecord } from "../utils/guards.ts";
 
 export const DOE_PLAN_STATE_TYPE = "doe-plan-state";
-export const DOE_PLAN_STATE_VERSION = 4;
+export const DOE_PLAN_STATE_VERSION = 5;
 
 export type DoePlanWorkflowStatus = "drafting" | "ready_for_review" | "needs_revision";
 
@@ -16,10 +16,20 @@ export interface DoeActivePlanState {
 	reviewFeedback: string | null;
 }
 
+export interface DoePendingReviewState {
+	reviewId: string;
+	sessionSlug: string | null;
+	planSlug: string;
+	planFilePath: string;
+	agentId: string | null;
+	requestedAt: number;
+}
+
 export interface DoePlanState {
 	version: number;
 	sessionSlugReminderSentAtTurn: number | null;
 	activePlan: DoeActivePlanState | null;
+	pendingReview: DoePendingReviewState | null;
 }
 
 function asFiniteNumber(value: unknown): number | null {
@@ -58,11 +68,33 @@ function normalizeActivePlanState(value: unknown): DoeActivePlanState | null {
 	};
 }
 
+function normalizePendingReviewState(value: unknown): DoePendingReviewState | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const reviewId = asString(value.reviewId);
+	const planSlug = asString(value.planSlug);
+	const planFilePath = asString(value.planFilePath);
+	const requestedAt = asFiniteNumber(value.requestedAt);
+	if (!reviewId || !planSlug || !planFilePath || requestedAt === null) {
+		return null;
+	}
+	return {
+		reviewId,
+		sessionSlug: asString(value.sessionSlug),
+		planSlug,
+		planFilePath,
+		agentId: asString(value.agentId),
+		requestedAt,
+	};
+}
+
 export function createEmptyPlanState(): DoePlanState {
 	return {
 		version: DOE_PLAN_STATE_VERSION,
 		sessionSlugReminderSentAtTurn: null,
 		activePlan: null,
+		pendingReview: null,
 	};
 }
 
@@ -71,6 +103,7 @@ export function clonePlanState(state: DoePlanState): DoePlanState {
 		version: DOE_PLAN_STATE_VERSION,
 		sessionSlugReminderSentAtTurn: state.sessionSlugReminderSentAtTurn ?? null,
 		activePlan: state.activePlan ? { ...state.activePlan } : null,
+		pendingReview: state.pendingReview ? { ...state.pendingReview } : null,
 	};
 }
 
@@ -88,6 +121,7 @@ export function normalizePlanState(value: unknown): DoePlanState {
 		version: DOE_PLAN_STATE_VERSION,
 		sessionSlugReminderSentAtTurn: asFiniteNumber(value.sessionSlugReminderSentAtTurn),
 		activePlan: normalizeActivePlanState(value.activePlan),
+		pendingReview: normalizePendingReviewState(value.pendingReview),
 	};
 }
 

@@ -49,7 +49,7 @@ test("restoreLatestPlanState uses the latest doe-plan-state entry and normalizes
 		},
 	]);
 
-	assert.equal(state.version, 4);
+	assert.equal(state.version, 5);
 	assert.equal(state.sessionSlugReminderSentAtTurn, 9);
 	assert.deepEqual(state.activePlan, {
 		sessionSlug: null,
@@ -61,11 +61,12 @@ test("restoreLatestPlanState uses the latest doe-plan-state entry and normalizes
 		status: "needs_revision",
 		reviewFeedback: "Add rollout details.",
 	});
+	assert.equal(state.pendingReview, null);
 });
 
 test("serializePlanState clones nested state", () => {
 	const initial: DoePlanState = {
-		version: 4,
+		version: 5,
 		sessionSlugReminderSentAtTurn: 3,
 		activePlan: {
 			sessionSlug: "feature-x",
@@ -77,10 +78,19 @@ test("serializePlanState clones nested state", () => {
 			status: "needs_revision",
 			reviewFeedback: "Add rollout details.",
 		},
+		pendingReview: {
+			reviewId: "review-1",
+			sessionSlug: "feature-x",
+			planSlug: "plan-a",
+			planFilePath: "/tmp/plan-a.md",
+			agentId: "agent-1",
+			requestedAt: 101,
+		},
 	};
 
 	const cloned = serializePlanState(initial);
 	assert.deepEqual(cloned, initial);
 	assert.notEqual(cloned, initial);
 	assert.notEqual(cloned.activePlan, initial.activePlan);
+	assert.notEqual(cloned.pendingReview, initial.pendingReview);
 });

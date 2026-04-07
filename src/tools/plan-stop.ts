@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import type { CodexAppServerClient } from "../codex/app-server-client.ts";
+import { getPlanReviewJob } from "../plan/review.ts";
 import type { DoePlanState } from "../plan/session-state.ts";
 import type { DoeRegistry } from "../roster/registry.ts";
 import { renderToolResultText } from "./tool-render.ts";
@@ -35,7 +36,8 @@ export function registerPlanStopTool(pi: ExtensionAPI, deps: PlanStopToolDeps) {
 		async execute() {
 			const state = deps.getPlanState();
 			const activePlan = state.activePlan;
-			if (!activePlan) {
+			const pendingReview = state.pendingReview;
+			if (!activePlan && !pendingReview) {
 				return {
 					content: [{ type: "text", text: "Planning mode is already idle." }],
 					details: { interrupted: false },
@@ -51,11 +53,20 @@ export function registerPlanStopTool(pi: ExtensionAPI, deps: PlanStopToolDeps) {
 					interrupted = true;
 				}
 			}
+			let cancelledReview = false;
+			if (pendingReview) {
+				const reviewJob = getPlanReviewJob(pendingReview.reviewId);
+				if (reviewJob) {
+					reviewJob.cancel();
+					cancelledReview = true;
+				}
+			}
 
 			deps.setPlanState(
 				(current) => ({
 					...current,
 					activePlan: null,
+					pendingReview: null,
 				}),
 				{ flush: true },
 			);
@@ -63,11 +74,15 @@ export function registerPlanStopTool(pi: ExtensionAPI, deps: PlanStopToolDeps) {
 			return {
 				content: [{
 					type: "text",
-					text: `Stopped planning workflow for ${activePlan.planSlug}.`,
+					text: activePlan
+						? `Stopped planning workflow for ${activePlan.planSlug}.`
+						: "Stopped pending planning review.",
 				}],
 				details: {
 					interrupted,
+					cancelledReview,
 					planSlug: activePlan?.planSlug ?? null,
+					reviewId: pendingReview?.reviewId ?? null,
 				},
 			};
 		},
