@@ -3,7 +3,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
-import type { DoeRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../roster/registry.js";
 import { cancelAgentRun } from "./cancel-agent-run.js";
 
 function resolveCancelTarget(registry: DoeRegistry, params: any) {

@@ -1,4 +1,4 @@
-import type { DoeRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../roster/registry.js";
 import { formatAgentCapacity } from "../agent-capacity.js";
 
 function formatState(state: string): string {

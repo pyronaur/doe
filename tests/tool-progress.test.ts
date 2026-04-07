@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { deriveUsageSnapshot } from "../src/context-usage.ts";
-import { DoeRegistry } from "../src/state/registry.ts";
-import type { AgentRecord } from "../src/types.ts";
+import { DoeRegistry } from "../src/roster/registry.ts";
+import type { AgentRecord } from "../src/roster/types.ts";
 import { buildToolProgressUpdate, readToolProgressSummary, startToolProgressUpdates } from "../src/tools/progress-updates.ts";
 
 function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {

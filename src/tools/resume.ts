@@ -7,8 +7,8 @@ import { extractLastCompletedAgentMessage, truncateForDisplay, type ApprovalPoli
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
-import type { DoeRegistry } from "../state/registry.js";
-import type { NotificationMode } from "../types.js";
+import type { DoeRegistry } from "../roster/registry.js";
+import type { NotificationMode } from "../roster/types.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.js";
 import { cancelAgentRun } from "./cancel-agent-run.js";

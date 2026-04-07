@@ -11,7 +11,7 @@ import {
 	truncateForDisplay,
 } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageBreakdown, formatUsageCompact } from "../context-usage.js";
-import type { DoeRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../roster/registry.js";
 
 const ActionSchema = StringEnum(["index", "files", "query", "transcript", "raw"] as const);
 const MESSAGE_BLOCK_MAX_CHARS = 4_000;

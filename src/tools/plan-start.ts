@@ -14,7 +14,7 @@ import {
 	readPlanFile,
 	renderPlanPrompt,
 } from "../plan/flow.js";
-import type { DoeRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../roster/registry.js";
 
 interface PlanStartToolDeps {
 	client: CodexAppServerClient;

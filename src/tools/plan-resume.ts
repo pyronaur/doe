@@ -10,7 +10,7 @@ import {
 	readPlanFile,
 } from "../plan/flow.js";
 import type { DoePlanState } from "../plan/session-state.js";
-import type { DoeRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../roster/registry.js";
 
 interface PlanResumeToolDeps {
 	client: CodexAppServerClient;

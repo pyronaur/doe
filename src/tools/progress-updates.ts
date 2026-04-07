@@ -1,5 +1,5 @@
-import type { DoeRegistry } from "../state/registry.js";
-import type { AgentRecord } from "../types.js";
+import type { DoeRegistry } from "../roster/registry.js";
+import type { AgentRecord } from "../roster/types.js";
 import { formatAgentProgressSummary } from "../ui/agent-progress.js";
 
 function collectAgents(registry: DoeRegistry, agentIds: string[]): AgentRecord[] {

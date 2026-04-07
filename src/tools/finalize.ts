@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
-import type { DoeRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../roster/registry.js";
 
 export function registerFinalizeTool(pi: ExtensionAPI, deps: { registry: DoeRegistry }) {
 	pi.registerTool({

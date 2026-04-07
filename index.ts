@@ -14,8 +14,8 @@ import {
 } from "./src/plan/session-state.js";
 import { dispatchPlannotatorRequest } from "./src/plan/plannotator-request.js";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./src/plan/reminder.js";
-import { DoeRegistry } from "./src/state/registry.js";
-import type { PersistedRegistrySnapshot, RegistryEvent } from "./src/types.js";
+import { DoeRegistry } from "./src/roster/registry.js";
+import type { PersistedRegistrySnapshot, RegistryEvent } from "./src/roster/types.js";
 import { AgentLiveViewController } from "./src/ui/agent-live-view.js";
 import { formatDoeStatus } from "./src/ui/doe-status.js";
 import { loadMarkdownDoc, loadMarkdownDocs, summarizeTemplates } from "./src/templates/loader.js";

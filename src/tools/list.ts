@@ -2,9 +2,9 @@ import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { DoeRegistry } from "../state/registry.js";
-import { SEAT_ROLE_LABELS, SEAT_ROLES } from "../config.js";
-import type { RosterAssignmentRecord } from "../types.js";
+import type { DoeRegistry } from "../roster/registry.js";
+import { SEAT_ROLE_LABELS, SEAT_ROLES } from "../roster/config.js";
+import type { RosterAssignmentRecord } from "../roster/types.js";
 import { truncateForDisplay } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 

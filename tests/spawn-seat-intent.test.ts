@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DoeRegistry } from "../src/state/registry.ts";
+import { DoeRegistry } from "../src/roster/registry.ts";
 import { normalizeSpawnSeatIntent } from "../src/tools/spawn-seat-intent.ts";
 
 test("known seat names in name are treated as seat intent when ic is omitted", () => {

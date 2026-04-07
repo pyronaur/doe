@@ -3,7 +3,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import type { DoePlanState } from "../plan/session-state.js";
-import type { DoeRegistry } from "../state/registry.js";
+import type { DoeRegistry } from "../roster/registry.js";
 
 interface PlanStopToolDeps {
 	client: CodexAppServerClient;

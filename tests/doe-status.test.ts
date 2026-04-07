@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DoeRegistry } from "../src/state/registry.ts";
-import type { AgentRecord } from "../src/types.ts";
+import { DoeRegistry } from "../src/roster/registry.ts";
+import type { AgentRecord } from "../src/roster/types.ts";
 import { deriveUsageSnapshot } from "../src/context-usage.ts";
 import { formatDoeStatus } from "../src/ui/doe-status.ts";
 

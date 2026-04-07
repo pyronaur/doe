@@ -1,18 +1,4 @@
-import type { ReasoningEffort } from "./codex/client.js";
-import type { ICRole, SeatRole } from "./types.js";
-
-export interface ICDefaults {
-	model: string;
-	effort?: ReasoningEffort;
-	allowWrite?: boolean;
-}
-
-export interface ICConfig {
-	slug: string;
-	name: string;
-	role: ICRole;
-	defaults: ICDefaults;
-}
+import type { ICRole, ICConfig, SeatRole } from "./types.js";
 
 export const IC_ROLES = ["senior", "mid", "research"] as const satisfies readonly ICRole[];
 export const SEAT_ROLES = [...IC_ROLES, "contractor"] as const satisfies readonly SeatRole[];
@@ -121,14 +107,3 @@ export const IC_CONFIG = [
 	},
 ] as const satisfies readonly ICConfig[];
 
-function normalizeICName(name: string): string {
-	return name.trim().toLowerCase();
-}
-
-export const IC_CONFIG_BY_SLUG = new Map(IC_CONFIG.map((ic) => [ic.slug, ic]));
-export const IC_CONFIG_BY_NAME = new Map(IC_CONFIG.map((ic) => [normalizeICName(ic.name), ic]));
-export const IC_DISPLAY_ORDER = new Map(IC_CONFIG.map((ic, index) => [normalizeICName(ic.name), index]));
-
-export function findICConfigByName(name: string): ICConfig | undefined {
-	return IC_CONFIG_BY_NAME.get(normalizeICName(name));
-}

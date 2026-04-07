@@ -3,9 +3,9 @@ import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi
 import { extractThreadTranscript, truncateForDisplay } from "../codex/client.js";
 import { formatUsageBreakdown } from "../context-usage.js";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import type { DoeRegistry } from "../state/registry.js";
-import { SEAT_ROLE_LABELS, SEAT_ROLES } from "../config.js";
-import type { AgentRecord } from "../types.js";
+import type { DoeRegistry } from "../roster/registry.js";
+import { SEAT_ROLE_LABELS, SEAT_ROLES } from "../roster/config.js";
+import type { AgentRecord } from "../roster/types.js";
 import { formatAgentProgressLine } from "./agent-progress.js";
 
 type ViewMode = "list" | "detail";
