@@ -1,25 +1,18 @@
-import { randomUUID } from "node:crypto";
-import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { Container, Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort, type SandboxMode } from "../codex/client.js";
-import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
-import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
-import { IC_ROLES } from "../roster/config.js";
-import type { DoeRegistry } from "../roster/registry.js";
-import type { ICRole, NotificationMode, SeatRole } from "../roster/types.js";
-import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
-import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.js";
-import { normalizeSpawnSeatIntent } from "./spawn-seat-intent.js";
-import { cancelAgentRun } from "./cancel-agent-run.js";
-import { formatSpawnAgentResult, formatSpawnBatchResults, resolveSpawnRenderBody } from "./spawn-result.js";
+import { Container, Text } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+import type { CodexAppServerClient } from "../codex/app-server-client.ts";
+import type { SandboxMode } from "../codex/client.ts";
+import type { DoeRegistry } from "../roster/registry.ts";
+import { readToolProgressSummary } from "./progress-updates.ts";
+import { resolveSpawnRenderBody } from "./spawn-result.ts";
+import { createSpawnExecuteHandler, normalizeMultiTaskArgs } from "./spawn-runtime.ts";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
 const SandboxSchema = StringEnum(["read-only", "workspace-write", "danger-full-access"] as const);
-const RoleSchema = StringEnum(IC_ROLES);
+const RoleSchema = StringEnum(["researcher", "senior", "mid", "junior", "intern"] as const);
 
 const TaskSchema = Type.Object({
 	name: Type.Optional(Type.String()),
@@ -55,7 +48,7 @@ const SpawnParametersSchema = Type.Object({
 	batchName: Type.Optional(Type.String()),
 });
 
-interface SpawnToolDeps {
+export interface SpawnToolDeps {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
 	templatesDir: string;
@@ -63,352 +56,104 @@ interface SpawnToolDeps {
 	setWorkingMessage?: (summary?: string) => void;
 }
 
-function inferName(prompt: string): string {
-	const words = prompt.replace(/\s+/g, " ").trim().split(" ").filter(Boolean).slice(0, 2);
-	return words.join(" ") || "delegate";
+export interface SpawnExecuteContext {
+	hasUI?: boolean;
+	ui?: {
+		setWorkingMessage(summary?: string): void;
+	};
 }
 
-function buildPrompt(
-	task: any,
-	templatesDir: string,
-	sharedContext: SharedKnowledgebaseContext | null,
-): { templateName: string | null; prompt: string; templateDefaultModel: string | null; templateDefaultEffort: ReasoningEffort | null } {
-	if (!task.template) {
-		return {
-			templateName: null,
-			prompt: injectSharedKnowledgebaseContext(task.prompt, sharedContext),
-			templateDefaultModel: null,
-			templateDefaultEffort: null,
-		};
-	}
-
-	const docs = loadMarkdownDocs(templatesDir);
-	const doc = docs.find((entry) => entry.name === task.template);
-	if (!doc) {
-		throw new Error(`Unknown template "${task.template}". Available: ${docs.map((entry) => entry.name).join(", ") || "none"}`);
-	}
-	const defaultModel = readOptionalModelId(doc.attributes.default_model, `template "${doc.name}" default_model`);
-	const defaultEffort = doc.attributes.default_effort;
-	if (defaultEffort !== "low" && defaultEffort !== "medium" && defaultEffort !== "high" && defaultEffort !== "xhigh") {
-		throw new Error(`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`);
-	}
-	const usesTaskPlaceholder = doc.body.includes("{{task}}");
-	const variables = {
-		task: task.prompt,
-		name: task.name,
-		cwd: task.cwd,
-		...(task.templateVariables ?? {}),
-	};
-	let rendered = renderMarkdownTemplate(doc, variables).trim();
-	if (task.prompt && !usesTaskPlaceholder) {
-		rendered = `${rendered}\n\n# Task\n${task.prompt}`.trim();
-	}
-	rendered = injectSharedKnowledgebaseContext(rendered, sharedContext);
+function createSpawnTool(
+	input: {
+		name: "codex_spawn" | "codex_delegate";
+		label: string;
+		description: string;
+		promptSnippet: string;
+		promptGuidelines: string[];
+		renderCallLabel: (args: any) => string;
+	},
+	deps: SpawnToolDeps,
+) {
+	const execute = createSpawnExecuteHandler({
+		deps,
+		resolveSandboxMode,
+	});
 	return {
-		templateName: doc.name,
-		prompt: rendered,
-		templateDefaultModel: defaultModel,
-		templateDefaultEffort: defaultEffort,
-	};
-}
-
-function buildTasks(params: any): any[] {
-	if (Array.isArray(params.tasks) && params.tasks.length > 0) return params.tasks;
-	if (!params.prompt || typeof params.prompt !== "string") {
-		throw new Error("Provide either tasks[] or a single prompt.");
-	}
-	return [
-		{
-			name: params.name ?? inferName(params.prompt),
-			ic: params.ic,
-			role: params.role,
-			prompt: params.prompt,
-			cwd: params.cwd,
-			model: params.model,
-			effort: params.effort,
-			template: params.template,
-			templateVariables: params.templateVariables,
-			approvalPolicy: params.approvalPolicy,
-			networkAccess: params.networkAccess,
-			allowWrite: params.allowWrite,
-			sandbox: params.sandbox,
+		name: input.name,
+		label: input.label,
+		description: input.description,
+		promptSnippet: input.promptSnippet,
+		promptGuidelines: input.promptGuidelines,
+		parameters: SpawnParametersSchema,
+		prepareArguments: normalizeMultiTaskArgs,
+		renderCall(args: any, theme: any) {
+			return new Text(theme.fg("accent", input.renderCallLabel(args)), 0, 0);
 		},
-	];
-}
-
-function normalizeMultiTaskArgs(args: unknown) {
-	if (!args || typeof args !== "object") return args;
-	const input = args as any;
-	if (!Array.isArray(input.tasks) || input.tasks.length === 0) return args;
-	return {
-		...input,
-		tasks: input.tasks.map((task: any) => {
-			const { returnMode: _taskReturnMode, notificationMode: _taskNotifyMode, ...rest } = task ?? {};
-			return rest;
-		}),
+		renderResult(result: any, options: any, _theme: any) {
+			if (options.isPartial && readToolProgressSummary(result)) {
+				return new Container();
+			}
+			return new Text(resolveSpawnRenderBody(result), 0, 0);
+		},
+		execute,
 	};
 }
 
-function inferAllowWrite(task: { template?: string | null; allowWrite?: boolean }, templateName: string | null): boolean {
-	if (typeof task.allowWrite === "boolean") return task.allowWrite;
-	return (templateName ?? task.template ?? null) === "implement";
-}
-
-export function resolveSandboxMode(role: ICRole | null | undefined, sandbox?: SandboxMode | null): SandboxMode {
-	if (role === "researcher" || role === "senior") return "danger-full-access";
-	if (role === "mid") return sandbox === "danger-full-access" ? "danger-full-access" : "workspace-write";
+export function resolveSandboxMode(
+	role: "researcher" | "senior" | "mid" | "junior" | "intern" | null | undefined,
+	sandbox?: SandboxMode | null,
+): SandboxMode {
+	if (role === "researcher" || role === "senior") {
+		return "danger-full-access";
+	}
+	if (role === "mid") {
+		return sandbox === "danger-full-access" ? "danger-full-access" : "workspace-write";
+	}
 	return "read-only";
 }
 
-function resolveSeatExecutionRole(requestedRole: ICRole | null | undefined, seatRole: SeatRole): ICRole {
-	if (seatRole !== "contractor") return seatRole;
-	if (requestedRole) return requestedRole;
-	throw new Error("Contractor assignments require an explicit role.");
-}
-
-async function executeSpawnLike(
-	params: any,
-	signal: AbortSignal | undefined,
-	onUpdate: ((update: any) => void) | undefined,
-	deps: SpawnToolDeps,
-) {
-	const tasks = buildTasks(params).map((task) => {
-		const seatIntent = normalizeSpawnSeatIntent(task, (name) => Boolean(deps.registry.findSeat(name)));
-		return {
-			...task,
-			name: seatIntent.taskName,
-			ic: seatIntent.ic,
-		};
-	});
-	const batchId = tasks.length > 1 ? randomUUID() : null;
-	const notificationMode = (batchId ? "wait_all" : "notify_each") as NotificationMode;
-	const returnMode = "wait" as const;
-	const batchName =
-		params.batchName ?? (tasks.length > 1 ? `${tasks.length} delegated tasks` : tasks[0]?.name ?? "delegated task");
-	const seededAgentIds = tasks.map(() => randomUUID());
-	const agentIds = [...seededAgentIds];
-	const promptsByAgentId: Record<string, string> = {};
-	if (batchId) {
-		deps.registry.createBatch({
-			id: batchId,
-			name: batchName,
-			agentIds,
-			notificationMode,
-			returnMode,
-		});
-	}
-	const stopProgressUpdates = startToolProgressUpdates({
-		registry: deps.registry,
-		agentIds,
-		onUpdate,
-		baseDetails: {
-			batchId,
-			batchName,
-			partial: true,
-		},
-		onProgressSummary: deps.setWorkingMessage,
-		onStop: () => deps.setWorkingMessage?.(),
-	});
-
-	try {
-		let index = 0;
-		for (const rawTask of tasks) {
-			index += 1;
-			const cwd = rawTask.cwd ?? process.cwd();
-			const approvalPolicy = (rawTask.approvalPolicy ?? "never") as ApprovalPolicy;
-			const networkAccess = rawTask.networkAccess ?? false;
-			const sessionSlug = deps.getSessionSlug?.() ?? null;
-			if (!sessionSlug) {
-				throw new Error("No canonical session slug is set. Call session_set before codex_spawn.");
-			}
-			const sharedContext = getSharedKnowledgebaseContext(cwd, sessionSlug);
-			const { templateName, prompt, templateDefaultModel, templateDefaultEffort } = buildPrompt(rawTask, deps.templatesDir, sharedContext);
-			const explicitModel = readOptionalModelId(rawTask.model, "model");
-			const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
-			const allowWrite = inferAllowWrite(rawTask, templateName);
-			const agentId = seededAgentIds[index - 1]!;
-			promptsByAgentId[agentId] = prompt;
-			const requestedRole = rawTask.role ? (rawTask.role as ICRole) : null;
-			const seat = deps.registry.assignSeat({
-				agentId,
-				ic: rawTask.ic ?? null,
-				role: requestedRole,
-				model: explicitModel ?? templateDefaultModel,
-			});
-			const model = validateModelId(
-				explicitModel ?? templateDefaultModel ?? seat.model,
-				explicitModel ? "model" : "resolved model",
-			);
-			const executionRole = resolveSeatExecutionRole(requestedRole, seat.role);
-			const sandbox = resolveSandboxMode(executionRole, rawTask.sandbox ?? params.sandbox);
-			const now = Date.now();
-
-			deps.registry.upsertAgent({
-				id: agentId,
-				name: seat.name,
-				cwd,
-				model,
-				effort,
-				template: templateName,
-				allowWrite,
-				threadId: null,
-				activeTurnId: null,
-				state: "working",
-				activityLabel: "starting",
-				latestSnippet: `queued: ${truncateForDisplay(prompt, 120)}`,
-				latestFinalOutput: null,
-				lastError: null,
-				usage: null,
-				compaction: null,
-				startedAt: now,
-				runStartedAt: now,
-				completedAt: null,
-				parentBatchId: batchId,
-				notificationMode,
-				returnMode,
-				completionNotified: false,
-				recovered: false,
-				seatName: seat.name,
-				seatRole: seat.role,
-				finishNote: null,
-				reuseSummary: null,
-				messages: [],
-				historyHydratedAt: null,
-			});
-
-			try {
-				const thread = await deps.client.startThread({
-					model,
-					cwd,
-					approvalPolicy,
-					networkAccess,
-					allowWrite,
-					sandbox,
-				});
-				deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id });
-
-				const turn = await deps.client.startTurn({
-					threadId: thread.thread.id,
-					prompt,
-					cwd,
-					model,
-					effort,
-					approvalPolicy,
-					networkAccess,
-					allowWrite,
-					sandbox,
-				});
-				deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id, activeTurnId: turn.turn.id });
-				deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
-				deps.registry.appendUserMessage(agentId, turn.turn.id, prompt);
-			} catch (error) {
-				deps.registry.markAgentError(agentId, error instanceof Error ? error.message : String(error));
-				throw error;
-			}
-		}
-
-		const finalAgents = batchId
-			? await deps.registry.waitForBatch(batchId, signal)
-			: [await deps.registry.waitForAgent(agentIds[0]!, signal)];
-		const text = batchId
-			? formatSpawnBatchResults(finalAgents, promptsByAgentId)
-			: formatSpawnAgentResult(finalAgents[0], { prompt: promptsByAgentId[finalAgents[0].id] ?? null });
-		return {
-			content: [{ type: "text", text }],
-			details: {
-				batchId,
-				batchName,
-				agents: finalAgents,
-				promptsByAgentId,
-			},
-		};
-	} catch (error) {
-		if (error instanceof Error && error.message === "Cancelled") {
-			for (const agentId of agentIds) {
-				const agent = deps.registry.getAgent(agentId);
-				if (!agent || agent.state !== "working") continue;
-				await cancelAgentRun({
-					agent,
-					client: deps.client,
-					registry: deps.registry,
-					note: "Cancelled by Director of Engineering.",
-				});
-			}
-		}
-		throw error;
-	} finally {
-		stopProgressUpdates();
-	}
-}
-
 export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
-	pi.registerTool({
-		name: "codex_spawn",
-		label: "Codex Spawn",
-		description: "Spawn one or more named IC assignments. Each task gets its own thread and seat.",
-		promptSnippet: "Spawn new Codex workers for scanning, research, planning, or implementation. Use tasks[] for parallel independent work.",
-		promptGuidelines: [
-			"Use for new work only. Do not use when an existing thread has relevant context — use codex_resume instead.",
-			"Use name for the task label. Use ic for seat targeting.",
-			"Fresh spawn on the same seat starts a new thread and does not preserve thread memory. Use codex_resume when the same thread context should continue.",
-			"Pass ic to target a specific named seat, or pass role to auto-allocate the next free IC in researcher|senior|mid|junior|intern. DOE rejects tasks that omit both.",
-			"Compatibility shim: if name exactly matches an existing seat and ic is omitted, DOE treats that name as the intended seat.",
-			"Each new task gets a fresh assignment. If a role is full, DOE allocates contractor-N overflow seats.",
-			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
-			"Sandbox follows DOE role policy. `allowWrite` only controls auto-approval of file-change requests; use `sandbox=\"danger-full-access\"` for mid-level workers when you need full access.",
-			"Waits for workers to complete and returns each worker's full final answer in content. Use that returned content directly as the worker result.",
-		],
-		parameters: SpawnParametersSchema,
-		prepareArguments: normalizeMultiTaskArgs,
-		renderCall(args, theme) {
-			const taskCount = Array.isArray((args as any).tasks) ? (args as any).tasks.length : 1;
-			const label = taskCount > 1 ? `${taskCount} agents` : "1 agent";
-			return new Text(theme.fg("accent", `codex_spawn ${label}`), 0, 0);
-		},
-		renderResult(result, options, theme) {
-			if (options.isPartial && readToolProgressSummary(result)) {
-				return new Container();
-			}
-			return new Text(resolveSpawnRenderBody(result as any), 0, 0);
-		},
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const setWorkingMessage = (summary?: string) => {
-				if (!ctx?.hasUI) return;
-				ctx.ui.setWorkingMessage(summary);
-			};
-			return executeSpawnLike(params, signal, onUpdate as any, {
-				...deps,
-				setWorkingMessage,
-			} as SpawnToolDeps & { setWorkingMessage?: (summary?: string) => void });
-		},
-	});
+	pi.registerTool(
+		createSpawnTool(
+			{
+				name: "codex_spawn",
+				label: "Codex Spawn",
+				description: "Spawn one or more named IC assignments. Each task gets its own thread and seat.",
+				promptSnippet:
+					"Spawn new Codex workers for scanning, research, planning, or implementation. Use tasks[] for parallel independent work.",
+				promptGuidelines: [
+					"Use for new work only. Do not use when an existing thread has relevant context — use codex_resume instead.",
+					"Use name for the task label. Use ic for seat targeting.",
+					"Fresh spawn on the same seat starts a new thread and does not preserve thread memory. Use codex_resume when the same thread context should continue.",
+					"Pass ic to target a specific named seat, or pass role to auto-allocate the next free IC in researcher|senior|mid|junior|intern. DOE rejects tasks that omit both.",
+					"Compatibility shim: if name exactly matches an existing seat and ic is omitted, DOE treats that name as the intended seat.",
+					"Each new task gets a fresh assignment. If a role is full, DOE allocates contractor-N overflow seats.",
+					"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
+					"Sandbox follows DOE role policy. `allowWrite` only controls auto-approval of file-change requests; use `sandbox=\"danger-full-access\"` for mid-level workers when you need full access.",
+					"Waits for workers to complete and returns each worker's full final answer in content. Use that returned content directly as the worker result.",
+				],
+				renderCallLabel(args) {
+					const taskCount = Array.isArray(args.tasks) ? args.tasks.length : 1;
+					return `codex_spawn ${taskCount > 1 ? `${taskCount} agents` : "1 agent"}`;
+				},
+			},
+			deps,
+		),
+	);
 
-	pi.registerTool({
-		name: "codex_delegate",
-		label: "Codex Delegate",
-		description: "Alias for codex_spawn.",
-		promptSnippet: "Alias of codex_spawn — identical behavior.",
-		promptGuidelines: ["Use codex_spawn instead. Both tools are identical."],
-		parameters: SpawnParametersSchema,
-		prepareArguments: normalizeMultiTaskArgs,
-		renderCall(args, theme) {
-			return new Text(theme.fg("accent", `codex_delegate ${(args as any).batchName ?? "task"}`), 0, 0);
-		},
-		renderResult(result, options, theme) {
-			if (options.isPartial && readToolProgressSummary(result)) {
-				return new Container();
-			}
-			return new Text(resolveSpawnRenderBody(result as any), 0, 0);
-		},
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const setWorkingMessage = (summary?: string) => {
-				if (!ctx?.hasUI) return;
-				ctx.ui.setWorkingMessage(summary);
-			};
-			return executeSpawnLike(params, signal, onUpdate as any, {
-				...deps,
-				setWorkingMessage,
-			} as SpawnToolDeps & { setWorkingMessage?: (summary?: string) => void });
-		},
-	});
+	pi.registerTool(
+		createSpawnTool(
+			{
+				name: "codex_delegate",
+				label: "Codex Delegate",
+				description: "Alias for codex_spawn.",
+				promptSnippet: "Alias of codex_spawn — identical behavior.",
+				promptGuidelines: ["Use codex_spawn instead. Both tools are identical."],
+				renderCallLabel(args) {
+					return `codex_delegate ${args.batchName ?? "task"}`;
+				},
+			},
+			deps,
+		),
+	);
 }
