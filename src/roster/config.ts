@@ -1,12 +1,14 @@
 import type { ICRole, ICConfig, SeatRole } from "./types.js";
 
-export const IC_ROLES = ["senior", "mid", "research"] as const satisfies readonly ICRole[];
+export const IC_ROLES = ["researcher", "senior", "mid", "junior", "intern"] as const satisfies readonly ICRole[];
 export const SEAT_ROLES = [...IC_ROLES, "contractor"] as const satisfies readonly SeatRole[];
 
 export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {
+	researcher: "Researchers",
 	senior: "Senior Engineers",
 	mid: "Mid-level Engineers",
-	research: "Researchers/Assistants",
+	junior: "Junior Engineers",
+	intern: "Interns",
 	contractor: "Contractors",
 };
 
@@ -17,7 +19,7 @@ export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {
 export const IC_CONFIG = [
 	{
 		name: "Tony",
-		role: "senior",
+		role: "researcher",
 		defaults: {
 			model: "gpt-5.4",
 			effort: "high",
@@ -26,7 +28,7 @@ export const IC_CONFIG = [
 	},
 	{
 		name: "Bruce",
-		role: "senior",
+		role: "researcher",
 		defaults: {
 			model: "gpt-5.4",
 			effort: "high",
@@ -37,7 +39,7 @@ export const IC_CONFIG = [
 		name: "Strange",
 		role: "senior",
 		defaults: {
-			model: "gpt-5.4",
+			model: "gpt-5.3-codex",
 			effort: "high",
 			allowWrite: true,
 		},
@@ -70,29 +72,29 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Hope",
-		role: "research",
-		defaults: {
-			model: "gpt-5.3-codex-spark",
-			effort: "high",
-			allowWrite: false,
-		},
-	},
-	{
 		name: "Jane",
-		role: "research",
+		role: "junior",
 		defaults: {
 			model: "gpt-5.4-mini",
-			effort: "high",
+			effort: "medium",
 			allowWrite: false,
 		},
 	},
 	{
 		name: "Pepper",
-		role: "research",
+		role: "junior",
 		defaults: {
 			model: "gpt-5.4-mini",
-			effort: "high",
+			effort: "medium",
+			allowWrite: false,
+		},
+	},
+	{
+		name: "Hope",
+		role: "intern",
+		defaults: {
+			model: "gpt-5.3-codex-spark",
+			effort: "low",
 			allowWrite: false,
 		},
 	},

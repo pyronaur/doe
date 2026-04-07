@@ -126,7 +126,7 @@ test("formatCompactRosterSummary groups ICs by role in config order", () => {
 
 	assert.equal(
 		result.roster,
-		"IC roster: senior: Tony, Bruce, Strange | mid: Peter, Sam, Scott | research: Hope, Jane, Pepper",
+		"IC roster: researcher: Tony, Bruce | senior: Strange | mid: Peter, Sam, Scott | junior: Jane, Pepper | intern: Hope",
 	);
 });
 
@@ -138,7 +138,7 @@ test("buildGuidanceMessage appends the compact roster summary", () => {
 		[
 			"SYSTEM",
 			"DECISION",
-			"IC roster: senior: Tony, Bruce, Strange | mid: Peter, Sam, Scott | research: Hope, Jane, Pepper",
+			"IC roster: researcher: Tony, Bruce | senior: Strange | mid: Peter, Sam, Scott | junior: Jane, Pepper | intern: Hope",
 		].join("\n\n"),
 	);
 });

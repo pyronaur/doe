@@ -100,7 +100,7 @@ function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 		completionNotified: false,
 		recovered: false,
 		seatName: "Hope",
-		seatRole: "research",
+		seatRole: "intern",
 		finishNote: null,
 		reuseSummary: null,
 		messages: [],

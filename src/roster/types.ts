@@ -4,7 +4,7 @@ import type { AgentCompactionState, AgentUsageSnapshot } from "../context-usage.
 export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_input" | "finalized";
 export type NotificationMode = "wait_all" | "notify_each";
 export type ReturnMode = "wait";
-export type ICRole = "senior" | "mid" | "research";
+export type ICRole = "researcher" | "senior" | "mid" | "junior" | "intern";
 export type SeatRole = ICRole | "contractor";
 
 export interface ICDefaults {
@@ -116,4 +116,3 @@ export type RegistryEvent =
 	| { type: "agent-updated"; agent: AgentRecord }
 	| { type: "agent-terminal"; agent: AgentRecord }
 	| { type: "batch-completed"; batch: BatchRecord; agents: AgentRecord[] };
-

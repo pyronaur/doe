@@ -29,15 +29,15 @@ test("registry seeds fixed IC roster in role order", () => {
 	assert.deepEqual(
 		registry.listRosterSeats().map((seat) => `${seat.role}:${seat.name}`),
 		[
-			"senior:Tony",
-			"senior:Bruce",
+			"researcher:Tony",
+			"researcher:Bruce",
 			"senior:Strange",
 			"mid:Peter",
 			"mid:Sam",
 			"mid:Scott",
-			"research:Hope",
-			"research:Jane",
-			"research:Pepper",
+			"junior:Jane",
+			"junior:Pepper",
+			"intern:Hope",
 		],
 	);
 });

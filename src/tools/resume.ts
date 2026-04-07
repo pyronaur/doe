@@ -38,7 +38,7 @@ function resolveAgentFinalOutput(agent: any): string | null {
 }
 
 export function resolveSandboxMode(role: string | null | undefined, sandbox?: SandboxMode | null): SandboxMode {
-	if (role === "senior") return "danger-full-access";
+	if (role === "researcher" || role === "senior") return "danger-full-access";
 	if (role === "mid") return sandbox === "danger-full-access" ? "danger-full-access" : "workspace-write";
 	return "read-only";
 }
