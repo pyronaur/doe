@@ -43,8 +43,11 @@ test("buildPlanResumePrompt includes feedback, commentary, and fixed output path
 		planFilePath: "/repo/.tmp/feature-x/plan-auth-refactor.md",
 		sharedKnowledgebasePath: "/repo/.tmp/feature-x",
 	});
-	assert.match(prompt, /CTO Review Feedback/);
+	assert.match(prompt, /<review_feedback>/);
 	assert.match(prompt, /Add rollout and test coverage\./);
+	assert.match(prompt, /<\/review_feedback>/);
+	assert.match(prompt, /<director_commentary>/);
 	assert.match(prompt, /Keep scope limited to the auth service\./);
+	assert.match(prompt, /<\/director_commentary>/);
 	assert.match(prompt, /Rewrite the plan only at: \/repo\/.tmp\/feature-x\/plan-auth-refactor\.md/);
 });

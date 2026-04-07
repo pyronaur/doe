@@ -145,9 +145,12 @@ export function buildPlanResumePrompt(input: {
 		`Rewrite the plan only at: ${input.planFilePath}`,
 		"Do not choose a different output path.",
 		"",
-		"# CTO Review Feedback",
+		"<review_feedback>",
 		input.reviewFeedback.trim(),
-		...(commentary ? ["", "# DoE Commentary", commentary] : []),
+		"</review_feedback>",
+		...(commentary
+			? ["", "<additional_instructions>", commentary, "</additional_instructions>"]
+			: []),
 		"",
 		"Revise the plan accordingly and overwrite the same markdown file.",
 	].join("\n");

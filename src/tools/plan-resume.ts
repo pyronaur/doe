@@ -33,7 +33,17 @@ function resolveAgentFinalOutput(agent: any): string {
 
 function formatPlanReviewSummary(review: DoePlanReviewResult): string[] {
 	if (!review.feedback) return [];
-	return ["", "# CTO Review Feedback", review.feedback];
+	return ["", "<review_feedback>", review.feedback, "</review_feedback>"];
+}
+
+function formatPlanResumeNextStep(review: DoePlanReviewResult): string[] {
+	if (review.status !== "needs_revision") return [];
+	return [
+		"",
+		"<next_step>",
+		"Review feedback is stored automatically. Use plan_resume with Director commentary only.",
+		"</next_step>",
+	];
 }
 
 async function retryPlanReview(input: {
@@ -65,11 +75,15 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 		promptSnippet: "Continue the current plan on the same IC seat and plan file.",
 		promptGuidelines: [
 			"Use this only when an active planning workflow already exists.",
+			"When the workflow is ready_for_review, retry the review only and do not revise the plan.",
+			"When the workflow needs_revision, revise the same plan file and then re-run review.",
 			"DOE automatically includes the captured review feedback for the active plan.",
 			"Pass only the Director commentary needed for the revision.",
 		],
 		parameters: Type.Object({
-			commentary: Type.Optional(Type.String()),
+			commentary: Type.Optional(Type.String({
+				description: "Director synthesis to guide the IC revision. Do not relay CTO review feedback here - it is injected automatically.",
+			})),
 		}),
 		renderCall(_args, theme) {
 			return new Text(theme.fg("accent", "plan_resume"), 0, 0);
@@ -123,9 +137,11 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 							`plan_file: ${state.activePlan.planFilePath}`,
 							`review_status: ${review.status}`,
 							...formatPlanReviewSummary(review),
+							...formatPlanResumeNextStep(review),
 							"",
 							"Review retried without revising the plan.",
-						].join("\n"),
+							...(review.status === "approved" ? ["", "Plan approved. Workflow cleared."] : []),
+					].join("\n"),
 					}],
 					details: {
 						agent: state.activePlan.agentId ? deps.registry.findAgent(state.activePlan.agentId) ?? null : null,
@@ -256,8 +272,10 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 						`plan_file: ${state.activePlan.planFilePath}`,
 						`review_status: ${review.status}`,
 						...formatPlanReviewSummary(review),
+						...formatPlanResumeNextStep(review),
 						"",
 						resolveAgentFinalOutput(finalAgent),
+						...(review.status === "approved" ? ["", "Plan approved. Workflow cleared."] : []),
 					].join("\n"),
 				}],
 				details: {

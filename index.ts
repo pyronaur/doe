@@ -248,6 +248,14 @@ export default function doeExtension(pi: ExtensionAPI) {
 		return [system, decision].filter((part) => part.length > 0).join("\n\n");
 	}
 
+	function buildPlanRevisionReminder() {
+		return {
+			customType: "doe-plan-revision-reminder",
+			content: "Plan feedback is stored automatically. Call plan_resume with Director commentary only.",
+			display: false,
+		};
+	}
+
 	async function restoreState(ctx: ExtensionContext) {
 		const activeRuntime = getRuntime();
 		activeRuntime.planState = restoreLatestPlanState(ctx.sessionManager.getBranch());
@@ -360,30 +368,32 @@ export default function doeExtension(pi: ExtensionAPI) {
 		if (!activeRuntime) return;
 		const sessionSlug = pi.getSessionName() ?? null;
 		const currentTurn = estimateCurrentTurnIndex(event.messages);
+		const messages = [...event.messages];
 		if (!shouldInjectSessionSlugReminder({
 			sessionSlug,
 			currentTurn,
 			lastReminderTurn: activeRuntime.planState.sessionSlugReminderSentAtTurn,
 		})) {
-			return;
+			// keep checking for a plan reminder below
+		} else {
+			updatePlanState(
+				(current) => ({
+					...current,
+					sessionSlugReminderSentAtTurn: currentTurn,
+				}),
+				{ flush: true },
+			);
+			messages.push({
+				customType: "doe-session-slug-reminder",
+				content: "No canonical DoE session slug is set yet. Call session_set before planning or shared-workspace work. Pass one concise sessionSlug.",
+				display: false,
+			});
 		}
-		updatePlanState(
-			(current) => ({
-				...current,
-				sessionSlugReminderSentAtTurn: currentTurn,
-			}),
-			{ flush: true },
-		);
-		return {
-			messages: [
-				...event.messages,
-				{
-					customType: "doe-session-slug-reminder",
-					content: "No canonical DoE session slug is set yet. Call session_set before planning or shared-workspace work. Pass one concise sessionSlug.",
-					display: false,
-				},
-			],
-		};
+		if (activeRuntime.planState.activePlan?.status === "needs_revision") {
+			messages.push(buildPlanRevisionReminder());
+		}
+		if (messages.length === event.messages.length) return;
+		return { messages };
 	});
 
 	pi.on("before_agent_start", async (_event) => {

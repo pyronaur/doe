@@ -273,6 +273,8 @@ test("plan_start requires an explicit IC, writes the plan file, and captures rev
 		assert.equal(tools.reviewCalls[0]?.planFilePath, planFilePath);
 		assert.match(result.content[0].text, /ic: Hope/);
 		assert.match(result.content[0].text, /review_status: needs_revision/);
+		assert.match(result.content[0].text, /<review_feedback>/);
+		assert.match(result.content[0].text, /<next_step>/);
 		assert.match(result.content[0].text, /Add rollout guidance/);
 		assert.equal(result.details.ic, "Hope");
 		assert.equal(result.details.reviewStatus, "needs_revision");
@@ -280,6 +282,42 @@ test("plan_start requires an explicit IC, writes the plan file, and captures rev
 		assert.match(client.turnCalls[0]!.prompt, /Write the plan only to:/);
 		assert.equal(registry.findAgent(planState.activePlan?.agentId ?? "")?.model, "gpt-5.4-mini");
 		assert.equal(registry.findAgent(planState.activePlan?.agentId ?? "")?.effort, "high");
+	} finally {
+		process.chdir(previousCwd);
+	}
+});
+
+test("plan_start approval clears the workflow and adds the closeout line", { concurrency: false }, async () => {
+	const repoRoot = mkdtempSync(join(tmpdir(), "doe-plan-tools-"));
+	const templatesDir = join(repoRoot, "templates");
+	createPlanTemplate(templatesDir);
+	const registry = new DoeRegistry();
+	const client = new FakePlanClient(registry, ["# Draft\n\nApproved plan.\n"]);
+	let planState = createEmptyPlanState();
+	const tools = await createToolHarness({
+		registry,
+		client,
+		templatesDir,
+		reviewResults: [{ status: "approved", feedback: null }],
+		getPlanState: () => planState,
+		setPlanState: (updater) => {
+			planState = updater(planState);
+			return planState;
+		},
+	});
+	const previousCwd = process.cwd();
+	process.chdir(repoRoot);
+
+	try {
+		const result = await tools.start.execute("tool-1", {
+			ic: "Hope",
+			planSlug: "auth refactor",
+			prompt: "Plan the auth rewrite.",
+		}, undefined);
+
+		assert.equal(planState.activePlan, null);
+		assert.match(result.content[0].text, /review_status: approved/);
+		assert.match(result.content[0].text, /Plan approved\. Workflow cleared\./);
 	} finally {
 		process.chdir(previousCwd);
 	}
@@ -328,13 +366,15 @@ test("plan_resume reuses the same IC, thread, and plan file with captured review
 		assert.match(planFilePath, /\/\.tmp\/feature-x\/plan-auth-refactor\.md$/);
 		assert.equal(client.resumeCalls.length, 1);
 		assert.equal(client.resumeCalls[0]?.model, "gpt-5.4-mini");
-		assert.match(client.turnCalls[1]!.prompt, /CTO Review Feedback/);
+		assert.match(client.turnCalls[1]!.prompt, /<review_feedback>/);
+		assert.match(client.turnCalls[1]!.prompt, /<director_commentary>/);
 		assert.match(client.turnCalls[1]!.prompt, /Add rollout and testing\./);
 		assert.match(client.turnCalls[1]!.prompt, /Keep scope tight\./);
 		assert.match(client.turnCalls[1]!.prompt, /Rewrite the plan only at:/);
 		assert.match(readFileSync(planFilePath, "utf-8"), /Updated plan/);
 		assert.equal(tools.reviewCalls.length, 2);
 		assert.match(result.content[0].text, /review_status: approved/);
+		assert.match(result.content[0].text, /Plan approved\. Workflow cleared\./);
 		assert.equal(result.details.ic, "Hope");
 		assert.equal(result.details.reviewStatus, "approved");
 		assert.equal(result.details.reviewFeedback, null);
@@ -497,6 +537,8 @@ test("plan_start review failure leaves the plan ready for review and plan_resume
 		assert.equal(planState.activePlan?.reviewFeedback, "# Plan Feedback\n\nRetry worked.");
 		assert.match(result.content[0].text, /Review retried without revising the plan\./);
 		assert.match(result.content[0].text, /review_status: needs_revision/);
+		assert.match(result.content[0].text, /<review_feedback>/);
+		assert.match(result.content[0].text, /<next_step>/);
 	} finally {
 		process.chdir(previousCwd);
 	}
@@ -554,6 +596,7 @@ test("plan_resume review failure after a revision stays retryable without anothe
 		assert.equal(planState.activePlan, null);
 		assert.match(retry.content[0].text, /Review retried without revising the plan\./);
 		assert.match(retry.content[0].text, /review_status: approved/);
+		assert.match(retry.content[0].text, /Plan approved\. Workflow cleared\./);
 	} finally {
 		process.chdir(previousCwd);
 	}

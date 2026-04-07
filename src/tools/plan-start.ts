@@ -38,7 +38,17 @@ function resolveAgentFinalOutput(agent: any): string {
 
 function formatPlanReviewSummary(review: DoePlanReviewResult): string[] {
 	if (!review.feedback) return [];
-	return ["", "# CTO Review Feedback", review.feedback];
+	return ["", "<review_feedback>", review.feedback, "</review_feedback>"];
+}
+
+function formatPlanStartNextStep(review: DoePlanReviewResult): string[] {
+	if (review.status !== "needs_revision") return [];
+	return [
+		"",
+		"<next_step>",
+		"Review feedback is stored automatically. Use plan_resume with Director commentary only.",
+		"</next_step>",
+	];
 }
 
 export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps) {
@@ -266,8 +276,10 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 						`plan_file: ${planFile.planFilePath}`,
 						`review_status: ${review.status}`,
 						...formatPlanReviewSummary(review),
+						...formatPlanStartNextStep(review),
 						"",
 						resolveAgentFinalOutput(finalAgent),
+						...(review.status === "approved" ? ["", "Plan approved. Workflow cleared."] : []),
 					].join("\n"),
 				}],
 				details: {
