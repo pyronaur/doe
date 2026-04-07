@@ -8,6 +8,7 @@ import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js"
 import type { DoePlanState } from "../plan/session-state.js";
 import {
 	ensurePlanFile,
+	formatPlanReviewCommand,
 	formatPlanReuseError,
 	getSharedKnowledgebaseContext,
 	preparePlanFile,
@@ -23,7 +24,6 @@ interface PlanStartToolDeps {
 	getSessionSlug: () => string | null;
 	getPlanState: () => DoePlanState;
 	setPlanState: (updater: (state: DoePlanState) => DoePlanState, options?: { flush?: boolean }) => DoePlanState;
-	requestPlanReview: (input: { planContent: string; planFilePath: string }) => Promise<{ reviewId: string }>;
 }
 
 function resolveAgentFinalOutput(agent: any): string {
@@ -37,13 +37,15 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 	pi.registerTool({
 		name: "plan_start",
 		label: "Plan Start",
-		description: "Start a planning workflow in the current DoE session.",
-		promptSnippet: "Start a planning workflow in the current DoE session.",
+		description: "Start a planning workflow on a specific IC seat in the current DoE session.",
+		promptSnippet: "Start a planning workflow on a specific IC seat in the current DoE session.",
 		promptGuidelines: [
 			"Pass one concise planSlug for this plan.",
-			"Use this to start a new planning workflow; use plan_resume to continue after review feedback.",
+			"Pass the planning IC explicitly.",
+			"Use this to draft a new plan; use plan_resume to revise the same plan file later.",
 		],
 		parameters: Type.Object({
+			ic: Type.String(),
 			planSlug: Type.String(),
 			prompt: Type.String(),
 			allowExisting: Type.Optional(Type.Boolean()),
@@ -61,9 +63,6 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 			}
 
 			const state = deps.getPlanState();
-			if (state.pendingReview) {
-				throw new Error(`A plan review is already pending for ${state.pendingReview.planSlug}. Use plan_resume after feedback or plan_stop to abandon planning mode.`);
-			}
 			if (state.activePlan) {
 				throw new Error(`A planning workflow is already active for ${state.activePlan.planSlug}. Use plan_resume to continue it or plan_stop to abandon it before starting a new plan.`);
 			}
@@ -92,7 +91,7 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 			const startedAt = Date.now();
 			const seat = deps.registry.assignSeat({
 				agentId,
-				role: "research",
+				ic: params.ic,
 			});
 
 			deps.registry.upsertAgent({
@@ -133,11 +132,11 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 					activePlan: {
 						planSlug: planFile.planSlug,
 						planFilePath: planFile.planFilePath,
+						ic: seat.name,
 						agentId,
 						threadId: null,
 						startedAt,
 					},
-					pendingReview: null,
 				}),
 				{ flush: true },
 			);
@@ -162,6 +161,7 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 						activePlan: current.activePlan
 							? {
 									...current.activePlan,
+									ic: current.activePlan.ic ?? seat.name,
 									threadId: thread.thread.id,
 								}
 							: current.activePlan,
@@ -188,7 +188,6 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 					(current) => ({
 						...current,
 						activePlan: null,
-						pendingReview: null,
 					}),
 					{ flush: true },
 				);
@@ -196,42 +195,30 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 			}
 
 			const finalAgent = await deps.registry.waitForAgent(agentId, signal);
-			const planContent = readPlanFile(planFile.planFilePath);
-			const review = await deps.requestPlanReview({
-				planContent,
-				planFilePath: planFile.planFilePath,
-			});
-			deps.setPlanState(
-				(current) => ({
-					...current,
-					pendingReview: {
-						planSlug: planFile.planSlug,
-						reviewId: review.reviewId,
-						requestedAt: Date.now(),
-					},
-				}),
-				{ flush: true },
-			);
+			readPlanFile(planFile.planFilePath);
+			const nextStep = formatPlanReviewCommand(planFile.planFilePath);
 
 			return {
 				content: [{
 					type: "text",
 					text: [
+						`ic: ${seat.name}`,
 						`plan_slug: ${planFile.planSlug}`,
 						`state: ${finalAgent.state}`,
 						`context: ${formatUsageCompact(finalAgent.usage)}`,
 						...(formatCompactionSignal(finalAgent.compaction) ? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`] : []),
 						`plan_file: ${planFile.planFilePath}`,
-						`review_id: ${review.reviewId}`,
+						`next_step: ${nextStep}`,
 						"",
 						resolveAgentFinalOutput(finalAgent),
 					].join("\n"),
 				}],
 				details: {
 					agent: finalAgent,
+					ic: seat.name,
 					planSlug: planFile.planSlug,
 					planFilePath: planFile.planFilePath,
-					reviewId: review.reviewId,
+					nextStep,
 					sharedKnowledgebasePath: shared.sharedKnowledgebasePath,
 				},
 			};

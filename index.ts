@@ -12,7 +12,6 @@ import {
 	serializePlanState,
 	type DoePlanState,
 } from "./src/plan/session-state.js";
-import { dispatchPlannotatorRequest } from "./src/plan/plannotator-request.js";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./src/plan/reminder.js";
 import { DoeRegistry } from "./src/roster/registry.js";
 import type { PersistedRegistrySnapshot, RegistryEvent } from "./src/roster/types.js";
@@ -32,9 +31,6 @@ import { registerFinalizeTool } from "./src/tools/finalize.js";
 import { ensureReadToolActive, evaluateReadGate } from "./src/read-gate.ts";
 
 const DOE_FLAG = "doe";
-const PLANNOTATOR_REQUEST_CHANNEL = "plannotator:request";
-const PLANNOTATOR_REVIEW_RESULT_CHANNEL = "plannotator:review-result";
-const PLANNOTATOR_TIMEOUT_MS = 5_000;
 const TOOL_NAMES = ensureReadToolActive([
 	"session_set",
 	"plan_start",
@@ -126,16 +122,6 @@ export default function doeExtension(pi: ExtensionAPI) {
 
 		registry.on("event", handleRegistryEvent);
 		client.on("event", handleCodexEvent);
-		pi.events.on(PLANNOTATOR_REVIEW_RESULT_CHANNEL, (data) => {
-			void handlePlanReviewResult(data as {
-				reviewId?: string;
-				approved?: boolean;
-				feedback?: string;
-				savedPath?: string;
-				agentSwitch?: string;
-				permissionMode?: string;
-			});
-		});
 
 		registerSessionSetTool(pi);
 		registerPlanStartTool(pi, {
@@ -145,7 +131,6 @@ export default function doeExtension(pi: ExtensionAPI) {
 			getSessionSlug: () => pi.getSessionName() ?? null,
 			getPlanState: () => clonePlanState(getRuntime().planState),
 			setPlanState: updatePlanState,
-			requestPlanReview,
 		});
 		registerPlanResumeTool(pi, {
 			client,
@@ -153,7 +138,6 @@ export default function doeExtension(pi: ExtensionAPI) {
 			getSessionSlug: () => pi.getSessionName() ?? null,
 			getPlanState: () => clonePlanState(getRuntime().planState),
 			setPlanState: updatePlanState,
-			requestPlanReview,
 		});
 		registerPlanStopTool(pi, {
 			client,
@@ -247,100 +231,6 @@ export default function doeExtension(pi: ExtensionAPI) {
 		return clonePlanState(activeRuntime.planState);
 	}
 
-	function requestPlannotatorAction<R>(action: string, payload: Record<string, unknown>): Promise<R> {
-		return new Promise((resolve, reject) => {
-			let settled = false;
-			const timer = setTimeout(() => {
-				if (settled) return;
-				settled = true;
-				reject(new Error("Timed out waiting for Plannotator review startup."));
-			}, PLANNOTATOR_TIMEOUT_MS);
-			dispatchPlannotatorRequest(pi.events as any, PLANNOTATOR_REQUEST_CHANNEL, {
-				requestId: `doe-${action}-${Date.now()}`,
-				action,
-				payload,
-				respond: (response: any) => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					if (response?.status !== "handled") {
-						reject(new Error(response?.error ?? "Plannotator review is unavailable."));
-						return;
-					}
-					resolve(response.result as R);
-				},
-			});
-		});
-	}
-
-	async function requestPlanReview(input: { planContent: string; planFilePath: string }): Promise<{ reviewId: string }> {
-		const result = await requestPlannotatorAction<{ status?: string; reviewId?: string }>("plan-review", {
-			planContent: input.planContent,
-			planFilePath: input.planFilePath,
-			origin: "doe",
-		});
-		const reviewId = result?.reviewId;
-		if (typeof reviewId !== "string" || !reviewId.trim()) {
-			throw new Error("Plannotator review did not return a reviewId.");
-		}
-		return { reviewId };
-	}
-
-	async function recoverPendingReview() {
-		if (!runtime?.planState.pendingReview?.reviewId) return;
-		const reviewId = runtime.planState.pendingReview.reviewId;
-		try {
-			const status = await requestPlannotatorAction<any>("review-status", { reviewId });
-			if (status?.status === "completed") {
-				await handlePlanReviewResult(status);
-			}
-		} catch {}
-	}
-
-	async function handlePlanReviewResult(result: {
-		reviewId?: string;
-		approved?: boolean;
-		feedback?: string;
-		savedPath?: string;
-		agentSwitch?: string;
-		permissionMode?: string;
-	}) {
-		if (!runtime) return;
-		const pending = runtime.planState.pendingReview;
-		if (!pending?.reviewId || pending.reviewId !== result.reviewId) return;
-		const planSlug = runtime.planState.activePlan?.planSlug ?? pending.planSlug;
-		updatePlanState(
-			(current) => ({
-				...current,
-				activePlan: result.approved ? null : current.activePlan,
-				pendingReview: null,
-			}),
-			{ flush: true },
-		);
-		pi.sendMessage(
-			{
-				customType: "doe-plan-review",
-				display: false,
-				content: [
-					`Plan review result for ${planSlug}: ${result.approved ? "approved" : "rejected"}.`,
-					result.feedback?.trim() ? `Feedback:\n${result.feedback.trim()}` : null,
-					result.savedPath ? `Saved path: ${result.savedPath}` : null,
-					result.agentSwitch ? `Agent switch: ${result.agentSwitch}` : null,
-					result.permissionMode ? `Permission mode: ${result.permissionMode}` : null,
-				]
-					.filter(Boolean)
-					.join("\n\n"),
-				details: {
-					reviewId: result.reviewId ?? null,
-					approved: result.approved === true,
-					feedback: result.feedback ?? null,
-					planSlug,
-				},
-			},
-			{ deliverAs: "steer", triggerTurn: true },
-		);
-	}
-
 	function updateUi(ctx: ExtensionContext) {
 		if (!runtime || !ctx.hasUI) return;
 		ctx.ui.setStatus("doe", ctx.ui.theme.fg("accent", formatDoeStatus(runtime.registry)));
@@ -371,7 +261,6 @@ export default function doeExtension(pi: ExtensionAPI) {
 				}
 			}
 		}
-		await recoverPendingReview();
 	}
 
 	function handleRegistryEvent(event: RegistryEvent) {

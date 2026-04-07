@@ -31,7 +31,7 @@ export function registerPlanStopTool(pi: ExtensionAPI, deps: PlanStopToolDeps) {
 		async execute() {
 			const state = deps.getPlanState();
 			const activePlan = state.activePlan;
-			if (!activePlan && !state.pendingReview) {
+			if (!activePlan) {
 				return {
 					content: [{ type: "text", text: "Planning mode is already idle." }],
 					details: { interrupted: false },
@@ -52,7 +52,6 @@ export function registerPlanStopTool(pi: ExtensionAPI, deps: PlanStopToolDeps) {
 				(current) => ({
 					...current,
 					activePlan: null,
-					pendingReview: null,
 				}),
 				{ flush: true },
 			);
@@ -60,9 +59,7 @@ export function registerPlanStopTool(pi: ExtensionAPI, deps: PlanStopToolDeps) {
 			return {
 				content: [{
 					type: "text",
-					text: activePlan
-						? `Stopped planning workflow for ${activePlan.planSlug}.`
-						: "Cleared pending planning review state.",
+					text: `Stopped planning workflow for ${activePlan.planSlug}.`,
 				}],
 				details: {
 					interrupted,

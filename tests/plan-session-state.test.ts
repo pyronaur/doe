@@ -22,6 +22,7 @@ test("restoreLatestPlanState uses the latest doe-plan-state entry and normalizes
 				activePlan: {
 					planSlug: "alpha",
 					planFilePath: "/tmp/alpha.md",
+					ic: "Hope",
 					agentId: "agent-1",
 					threadId: "thread-1",
 					startedAt: 10,
@@ -32,37 +33,42 @@ test("restoreLatestPlanState uses the latest doe-plan-state entry and normalizes
 			type: "custom",
 			customType: "doe-plan-state",
 			data: {
-				pendingReview: {
+				sessionSlugReminderSentAtTurn: 9,
+				activePlan: {
 					planSlug: "beta",
-					reviewId: "review-1",
-					requestedAt: 20,
+					planFilePath: "/tmp/beta.md",
+					agentId: "agent-2",
+					threadId: "thread-2",
+					startedAt: 20,
 				},
 			},
 		},
 	]);
 
-	assert.equal(state.version, 1);
-	assert.equal(state.sessionSlugReminderSentAtTurn, null);
-	assert.equal(state.activePlan, null);
-	assert.deepEqual(state.pendingReview, {
+	assert.equal(state.version, 2);
+	assert.equal(state.sessionSlugReminderSentAtTurn, 9);
+	assert.deepEqual(state.activePlan, {
 		planSlug: "beta",
-		reviewId: "review-1",
-		requestedAt: 20,
+		planFilePath: "/tmp/beta.md",
+		ic: null,
+		agentId: "agent-2",
+		threadId: "thread-2",
+		startedAt: 20,
 	});
 });
 
 test("serializePlanState clones nested state", () => {
 	const initial: DoePlanState = {
-		version: 1,
+		version: 2,
 		sessionSlugReminderSentAtTurn: 3,
 		activePlan: {
 			planSlug: "plan-a",
 			planFilePath: "/tmp/plan-a.md",
+			ic: "Hope",
 			agentId: "agent-1",
 			threadId: null,
 			startedAt: 123,
 		},
-		pendingReview: null,
 	};
 
 	const cloned = serializePlanState(initial);

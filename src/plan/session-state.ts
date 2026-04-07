@@ -1,25 +1,19 @@
 export const DOE_PLAN_STATE_TYPE = "doe-plan-state";
-export const DOE_PLAN_STATE_VERSION = 1;
+export const DOE_PLAN_STATE_VERSION = 2;
 
 export interface DoeActivePlanState {
 	planSlug: string;
 	planFilePath: string;
+	ic: string | null;
 	agentId: string | null;
 	threadId: string | null;
 	startedAt: number;
-}
-
-export interface DoePendingReviewState {
-	planSlug: string;
-	reviewId: string | null;
-	requestedAt: number;
 }
 
 export interface DoePlanState {
 	version: number;
 	sessionSlugReminderSentAtTurn: number | null;
 	activePlan: DoeActivePlanState | null;
-	pendingReview: DoePendingReviewState | null;
 }
 
 interface CustomEntryLike {
@@ -46,22 +40,10 @@ function normalizeActivePlanState(value: unknown): DoeActivePlanState | null {
 	return {
 		planSlug,
 		planFilePath,
+		ic: asString(input.ic),
 		agentId: asString(input.agentId),
 		threadId: asString(input.threadId),
 		startedAt,
-	};
-}
-
-function normalizePendingReviewState(value: unknown): DoePendingReviewState | null {
-	if (!value || typeof value !== "object") return null;
-	const input = value as Record<string, unknown>;
-	const planSlug = asString(input.planSlug);
-	const requestedAt = asFiniteNumber(input.requestedAt);
-	if (!planSlug || requestedAt === null) return null;
-	return {
-		planSlug,
-		reviewId: asString(input.reviewId),
-		requestedAt,
 	};
 }
 
@@ -70,7 +52,6 @@ export function createEmptyPlanState(): DoePlanState {
 		version: DOE_PLAN_STATE_VERSION,
 		sessionSlugReminderSentAtTurn: null,
 		activePlan: null,
-		pendingReview: null,
 	};
 }
 
@@ -79,7 +60,6 @@ export function clonePlanState(state: DoePlanState): DoePlanState {
 		version: DOE_PLAN_STATE_VERSION,
 		sessionSlugReminderSentAtTurn: state.sessionSlugReminderSentAtTurn ?? null,
 		activePlan: state.activePlan ? { ...state.activePlan } : null,
-		pendingReview: state.pendingReview ? { ...state.pendingReview } : null,
 	};
 }
 
@@ -90,7 +70,6 @@ export function normalizePlanState(value: unknown): DoePlanState {
 		version: DOE_PLAN_STATE_VERSION,
 		sessionSlugReminderSentAtTurn: asFiniteNumber(input.sessionSlugReminderSentAtTurn),
 		activePlan: normalizeActivePlanState(input.activePlan),
-		pendingReview: normalizePendingReviewState(input.pendingReview),
 	};
 }
 

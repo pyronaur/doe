@@ -77,6 +77,10 @@ export function readPlanFile(path: string): string {
 	return text;
 }
 
+export function formatPlanReviewCommand(planFilePath: string): string {
+	return `!plannotator annotate ${planFilePath}`;
+}
+
 export function renderPlanPrompt(input: {
 	templatesDir: string;
 	task: string;

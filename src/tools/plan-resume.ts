@@ -6,6 +6,7 @@ import { truncateForDisplay } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import {
 	buildPlanResumePrompt,
+	formatPlanReviewCommand,
 	getSharedKnowledgebaseContext,
 	readPlanFile,
 } from "../plan/flow.js";
@@ -18,7 +19,6 @@ interface PlanResumeToolDeps {
 	getSessionSlug: () => string | null;
 	getPlanState: () => DoePlanState;
 	setPlanState: (updater: (state: DoePlanState) => DoePlanState, options?: { flush?: boolean }) => DoePlanState;
-	requestPlanReview: (input: { planContent: string; planFilePath: string }) => Promise<{ reviewId: string }>;
 }
 
 function resolveAgentFinalOutput(agent: any): string {
@@ -32,11 +32,11 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 	pi.registerTool({
 		name: "plan_resume",
 		label: "Plan Resume",
-		description: "Continue the current plan after review feedback.",
-		promptSnippet: "Continue the current plan after review feedback.",
+		description: "Continue the current plan on the same IC seat and plan file.",
+		promptSnippet: "Continue the current plan on the same IC seat and plan file.",
 		promptGuidelines: [
-			"Use this only after a plan review has produced feedback.",
-			"Pass CTO feedback and optional DoE commentary for the same active plan.",
+			"Use this only when an active planning workflow already exists.",
+			"Pass review feedback and optional DoE commentary for the same active plan.",
 		],
 		parameters: Type.Object({
 			feedback: Type.String(),
@@ -55,9 +55,6 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 			}
 
 			const state = deps.getPlanState();
-			if (state.pendingReview) {
-				throw new Error(`Plan review ${state.pendingReview.reviewId ?? ""} is still pending for ${state.pendingReview.planSlug}. Wait for the review result before calling plan_resume.`);
-			}
 			if (!state.activePlan) {
 				throw new Error("No active planning workflow exists. Use plan_start first.");
 			}
@@ -124,42 +121,31 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 			}
 
 			const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
-			const planContent = readPlanFile(state.activePlan.planFilePath);
-			const review = await deps.requestPlanReview({
-				planContent,
-				planFilePath: state.activePlan.planFilePath,
-			});
-			deps.setPlanState(
-				(current) => ({
-					...current,
-					pendingReview: {
-						planSlug: current.activePlan?.planSlug ?? state.activePlan.planSlug,
-						reviewId: review.reviewId,
-						requestedAt: Date.now(),
-					},
-				}),
-				{ flush: true },
-			);
+			readPlanFile(state.activePlan.planFilePath);
+			const nextStep = formatPlanReviewCommand(state.activePlan.planFilePath);
+			const ic = state.activePlan.ic ?? agent.seatName ?? agent.name;
 
 			return {
 				content: [{
 					type: "text",
 					text: [
+						`ic: ${ic}`,
 						`plan_slug: ${state.activePlan.planSlug}`,
 						`state: ${finalAgent.state}`,
 						`context: ${formatUsageCompact(finalAgent.usage)}`,
 						...(formatCompactionSignal(finalAgent.compaction) ? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`] : []),
 						`plan_file: ${state.activePlan.planFilePath}`,
-						`review_id: ${review.reviewId}`,
+						`next_step: ${nextStep}`,
 						"",
 						resolveAgentFinalOutput(finalAgent),
 					].join("\n"),
 				}],
 				details: {
 					agent: finalAgent,
+					ic,
 					planSlug: state.activePlan.planSlug,
 					planFilePath: state.activePlan.planFilePath,
-					reviewId: review.reviewId,
+					nextStep,
 				},
 			};
 		},

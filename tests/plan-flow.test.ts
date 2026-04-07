@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	buildPlanResumePrompt,
+	formatPlanReviewCommand,
 	formatPlanReuseError,
 	getSharedKnowledgebaseContext,
 	injectSharedKnowledgebaseContext,
@@ -47,4 +48,11 @@ test("buildPlanResumePrompt includes feedback, commentary, and fixed output path
 	assert.match(prompt, /Add rollout and test coverage\./);
 	assert.match(prompt, /Keep scope limited to the auth service\./);
 	assert.match(prompt, /Rewrite the plan only at: \/repo\/.tmp\/feature-x\/plan-auth-refactor\.md/);
+});
+
+test("formatPlanReviewCommand returns the plannotator annotate step for the plan file", () => {
+	assert.equal(
+		formatPlanReviewCommand("/repo/.tmp/feature-x/plan-auth-refactor.md"),
+		"!plannotator annotate /repo/.tmp/feature-x/plan-auth-refactor.md",
+	);
 });
