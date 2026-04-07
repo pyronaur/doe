@@ -165,3 +165,45 @@ test("CodexAppServerClient keeps turn sandbox and approval gates separate", asyn
 	assert.deepEqual(sent[0], { id: 1, result: { decision: "decline" } });
 	assert.deepEqual(sent[1], { id: 2, result: { decision: "decline" } });
 });
+
+test("CodexAppServerClient forwards read-only sandbox settings", async () => {
+	const { client, calls } = createMockClient();
+
+	await client.startThread({
+		model: "gpt-5.4",
+		cwd: "/tmp",
+		approvalPolicy: "never",
+		sandbox: "read-only",
+		networkAccess: true,
+	});
+
+	assert.equal(calls[0]?.method, "thread/start");
+	assert.equal(calls[0]?.params.sandbox, "read-only");
+
+	calls.length = 0;
+	await client.resumeThread({
+		threadId: "thread-1",
+		cwd: "/tmp",
+		sandbox: "read-only",
+	});
+
+	assert.equal(calls[0]?.method, "thread/resume");
+	assert.equal(calls[0]?.params.sandbox, "read-only");
+
+	calls.length = 0;
+	await client.startTurn({
+		threadId: "thread-1",
+		prompt: "hello",
+		cwd: "/tmp",
+		model: "gpt-5.4",
+		sandbox: "read-only",
+		networkAccess: true,
+	});
+
+	assert.equal(calls[0]?.method, "turn/start");
+	assert.deepEqual(calls[0]?.params.sandboxPolicy, {
+		type: "readOnly",
+		access: { type: "fullAccess" },
+		networkAccess: true,
+	});
+});

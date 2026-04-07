@@ -4,7 +4,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Container, Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
+import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort, type SandboxMode } from "../codex/client.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
 import { IC_ROLES } from "../roster/config.js";
@@ -150,6 +150,12 @@ function inferAllowWrite(task: { template?: string | null; allowWrite?: boolean 
 	return (templateName ?? task.template ?? null) === "implement";
 }
 
+export function resolveSandboxMode(role: ICRole | null | undefined, allowWrite: boolean): SandboxMode {
+	if (role === "senior") return "danger-full-access";
+	if (role === "mid") return allowWrite ? "danger-full-access" : "read-only";
+	return "read-only";
+}
+
 async function executeSpawnLike(
 	params: any,
 	signal: AbortSignal | undefined,
@@ -211,6 +217,7 @@ async function executeSpawnLike(
 			const model = validateModelId(explicitModel ?? templateDefaultModel ?? "gpt-5.4-mini", explicitModel ? "model" : "resolved model");
 			const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
 			const allowWrite = inferAllowWrite(rawTask, templateName);
+			const sandbox = resolveSandboxMode((rawTask.role ?? "mid") as ICRole, allowWrite);
 			const agentId = seededAgentIds[index - 1]!;
 			promptsByAgentId[agentId] = prompt;
 			const seat = deps.registry.assignSeat({
@@ -260,6 +267,7 @@ async function executeSpawnLike(
 					approvalPolicy,
 					networkAccess,
 					allowWrite,
+					sandbox,
 				});
 				deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id });
 
@@ -272,6 +280,7 @@ async function executeSpawnLike(
 					approvalPolicy,
 					networkAccess,
 					allowWrite,
+					sandbox,
 				});
 				deps.registry.markThreadAttached(agentId, { threadId: thread.thread.id, activeTurnId: turn.turn.id });
 				deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);

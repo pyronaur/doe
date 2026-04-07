@@ -3,7 +3,13 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Container, Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { extractLastCompletedAgentMessage, truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
+import {
+	extractLastCompletedAgentMessage,
+	truncateForDisplay,
+	type ApprovalPolicy,
+	type ReasoningEffort,
+	type SandboxMode,
+} from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
@@ -28,6 +34,12 @@ function resolveAgentFinalOutput(agent: any): string | null {
 		.reverse()
 		.find((message: any) => message?.role === "agent" && typeof message?.text === "string" && message.text.trim().length > 0)?.text;
 	return agent?.latestFinalOutput ?? lastAgentMessage ?? null;
+}
+
+export function resolveSandboxMode(role: string | null | undefined, allowWrite: boolean): SandboxMode {
+	if (role === "senior") return "danger-full-access";
+	if (role === "mid") return allowWrite ? "danger-full-access" : "read-only";
+	return "read-only";
 }
 
 function buildPrompt(
@@ -142,6 +154,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			const inheritedModel = explicitModel || templateDefaultModel ? null : validateModelId(agent.model, `stored model for agent ${agent.id}`);
 			const model = validateModelId(explicitModel ?? templateDefaultModel ?? inheritedModel ?? agent.model, explicitModel ? "model" : "resolved model");
 			const allowWrite = params.allowWrite ?? ((templateName ?? params.template ?? agent.template ?? null) === "implement" ? true : (agent.allowWrite ?? false));
+			const sandbox = resolveSandboxMode(agent.seatRole ?? null, allowWrite);
 			const runStartedAt = Date.now();
 
 			deps.registry.upsertAgent({
@@ -197,6 +210,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 						model,
 						approvalPolicy,
 						allowWrite,
+						sandbox,
 					});
 					const turn = await deps.client.startTurn({
 						threadId: agent.threadId,
@@ -207,6 +221,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 						approvalPolicy,
 						networkAccess,
 						allowWrite,
+						sandbox,
 					});
 					deps.registry.markThreadAttached(agent.id, { threadId: agent.threadId, activeTurnId: turn.turn.id });
 					deps.registry.markTurnStarted(agent.threadId, turn.turn.id);

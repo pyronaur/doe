@@ -3,10 +3,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import {
 	buildDangerFullAccessSandbox,
+	buildReadOnlySandbox,
 	type AgentActivity,
 	type CodexClientEvent,
 	type ThreadStartOptions,
 	type ThreadSummary,
+	type SandboxMode,
 	type TurnStartOptions,
 	type TurnSteerOptions,
 } from "./client.js";
@@ -92,6 +94,11 @@ function normalizeCurrentContextUsage(value: any): CurrentContextUsage | null {
 	};
 }
 
+function buildSandboxPolicy(sandbox: SandboxMode, networkAccess = false) {
+	if (sandbox === "read-only") return buildReadOnlySandbox(networkAccess);
+	return buildDangerFullAccessSandbox();
+}
+
 export class CodexAppServerClient extends EventEmitter {
 	private proc: ChildProcessWithoutNullStreams | null = null;
 	private reader: readline.Interface | null = null;
@@ -160,7 +167,7 @@ export class CodexAppServerClient extends EventEmitter {
 			model: options.model,
 			cwd: options.cwd,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandbox: "danger-full-access",
+			sandbox: options.sandbox ?? "danger-full-access",
 			serviceName: options.serviceName ?? this.options.serviceName ?? "pi_doe",
 			baseInstructions: options.baseInstructions ?? null,
 			developerInstructions: options.developerInstructions ?? null,
@@ -174,7 +181,7 @@ export class CodexAppServerClient extends EventEmitter {
 		return result;
 	}
 
-	async resumeThread(options: { threadId: string; model?: string; cwd?: string; approvalPolicy?: string; allowWrite?: boolean }): Promise<any> {
+	async resumeThread(options: { threadId: string; model?: string; cwd?: string; approvalPolicy?: string; allowWrite?: boolean; sandbox?: SandboxMode }): Promise<any> {
 		await this.ensureStarted();
 		const allowWrite = options.allowWrite ?? this.threadWriteAccess.get(options.threadId) ?? false;
 		const result = await this.request("thread/resume", {
@@ -182,7 +189,7 @@ export class CodexAppServerClient extends EventEmitter {
 			model: options.model ?? null,
 			cwd: options.cwd ?? null,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandbox: "danger-full-access",
+			sandbox: options.sandbox ?? "danger-full-access",
 			persistExtendedHistory: true,
 		});
 		this.threadWriteAccess.set(options.threadId, allowWrite);
@@ -224,7 +231,7 @@ export class CodexAppServerClient extends EventEmitter {
 			input: [{ type: "text", text: options.prompt }],
 			cwd: options.cwd,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandboxPolicy: buildDangerFullAccessSandbox(),
+			sandboxPolicy: buildSandboxPolicy(options.sandbox ?? "danger-full-access", options.networkAccess ?? false),
 			model: options.model,
 			effort: options.effort ?? "medium",
 		});

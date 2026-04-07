@@ -2,6 +2,7 @@ import type { CurrentContextUsage, ThreadTokenUsage } from "../context-usage.js"
 
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type ApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+export type SandboxMode = "danger-full-access" | "read-only";
 
 export interface ThreadSummary {
 	id: string;
@@ -66,6 +67,7 @@ export interface ThreadStartOptions {
 	cwd: string;
 	approvalPolicy?: ApprovalPolicy;
 	networkAccess?: boolean;
+	sandbox?: SandboxMode;
 	serviceName?: string;
 	baseInstructions?: string;
 	developerInstructions?: string;
@@ -81,6 +83,7 @@ export interface TurnStartOptions {
 	effort?: ReasoningEffort;
 	approvalPolicy?: ApprovalPolicy;
 	networkAccess?: boolean;
+	sandbox?: SandboxMode;
 	allowWrite?: boolean;
 }
 
