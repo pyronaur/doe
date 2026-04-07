@@ -282,3 +282,56 @@ test("CodexAppServerClient forwards workspace-write sandbox settings", async () 
 		excludeSlashTmp: false,
 	});
 });
+
+test("CodexAppServerClient reads context usage via thread/read", async () => {
+	const { client, calls } = createMockClient();
+	const usage = await client.readContextWindowUsage("thread-1", "turn-1");
+
+	assert.deepEqual(usage, null);
+	assert.equal(calls[0]?.method, "thread/read");
+	assert.deepEqual(calls[0]?.params, {
+		threadId: "thread-1",
+		includeTurns: false,
+	});
+});
+
+test("CodexAppServerClient parses usage from thread/read top-level usage", async () => {
+	const client = new CodexAppServerClient();
+	setMethod(client, "ensureStarted", async () => {});
+	setMethod(client, "request", async (method, _params) => {
+		if (method === "thread/read") {
+			return {
+				usage: {
+					last_token_usage: { total_tokens: 1234 },
+					model_context_window: 20000,
+				},
+			};
+		}
+		return {};
+	});
+
+	const usage = await client.readContextWindowUsage("thread-1", null);
+	assert.deepEqual(usage, { tokensUsed: 1234, tokenLimit: 20000 });
+});
+
+test("CodexAppServerClient parses usage from thread/read thread.tokenUsage", async () => {
+	const client = new CodexAppServerClient();
+	setMethod(client, "ensureStarted", async () => {});
+	setMethod(client, "request", async (method, _params) => {
+		if (method === "thread/read") {
+			return {
+				thread: {
+					tokenUsage: {
+						last: { totalTokens: 4321 },
+						total: { totalTokens: 4500 },
+						modelContextWindow: 64000,
+					},
+				},
+			};
+		}
+		return {};
+	});
+
+	const usage = await client.readContextWindowUsage("thread-1");
+	assert.deepEqual(usage, { tokensUsed: 4321, tokenLimit: 64000 });
+});

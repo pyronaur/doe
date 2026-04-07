@@ -6,6 +6,7 @@ import { isRecord } from "../utils/guards.ts";
 import {
 	handleAppServerNotification,
 	normalizeCurrentContextUsage,
+	normalizeThreadTokenUsage,
 } from "./app-server-support.ts";
 import {
 	buildDangerFullAccessSandbox,
@@ -35,6 +36,22 @@ function buildSandboxPolicy(sandbox: SandboxMode, networkAccess = false) {
 		} as const;
 	}
 	return buildDangerFullAccessSandbox();
+}
+
+function parseContextUsage(value: unknown): CurrentContextUsage | null {
+	const usage = normalizeCurrentContextUsage(value);
+	if (usage) {
+		return usage;
+	}
+	const tokenUsage = normalizeThreadTokenUsage(value);
+	if (!tokenUsage) {
+		return null;
+	}
+	return normalizeCurrentContextUsage({
+		last_token_usage: { total_tokens: tokenUsage.last.totalTokens },
+		total_token_usage: { total_tokens: tokenUsage.total.totalTokens },
+		model_context_window: tokenUsage.modelContextWindow,
+	});
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -171,11 +188,24 @@ export class CodexAppServerClient extends EventEmitter {
 		turnId?: string | null,
 	): Promise<CurrentContextUsage | null> {
 		await this.ensureStarted();
-		const result = await this.request("thread/contextWindow/read", {
+		const result = await this.request("thread/read", {
 			threadId,
-			turnId: turnId ?? null,
+			includeTurns: false,
 		});
-		return normalizeCurrentContextUsage(result?.usage ?? result);
+		const candidates = [
+			result?.usage,
+			result?.tokenUsage,
+			result?.thread?.usage,
+			result?.thread?.tokenUsage,
+			result,
+		];
+		for (const candidate of candidates) {
+			const usage = parseContextUsage(candidate);
+			if (usage) {
+				return usage;
+			}
+		}
+		return null;
 	}
 
 	async startTurn(options: TurnStartOptions): Promise<any> {
