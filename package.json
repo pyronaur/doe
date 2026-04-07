@@ -1,6 +1,23 @@
 {
-  "name": "pi-doe-extension",
-  "version": "0.1.0",
-  "type": "module",
-  "private": true
+	"name": "pi-doe-extension",
+	"version": "0.1.0",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"deps": "knip --config knip.json --no-progress",
+		"dup": "jscpd --config .jscpd.json --exitCode 1 . && jscpd --config .jscpd.tests.json --exitCode 1 .",
+		"format:check": "dprint check",
+		"lint": "oxlint --config .oxlintrc.json --type-aware .",
+		"test": "node --test tests/*.test.ts"
+	},
+	"devDependencies": {
+		"@types/node": "^25.5.2",
+		"dprint": "^0.53.2",
+    "jscpd": "^4.0.8",
+    "knip": "^6.3.0",
+    "oxlint": "^1.59.0",
+    "oxlint-plugin-inhuman": "^0.1.7",
+    "oxlint-tsgolint": "^0.20.0",
+    "typescript": "^6.0.2"
+  }
 }

@@ -1,0 +1,5 @@
+{
+	"entry": ["index.ts"],
+	"project": ["tsconfig.json"],
+	"ignore": ["node_modules", ".tmp"]
+}

@@ -1,0 +1,72 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"plugins": ["eslint", "typescript", "unicorn", "oxc", "import"],
+	"jsPlugins": ["oxlint-plugin-inhuman"],
+	"ignorePatterns": [
+		"**/node_modules/**",
+		"**/.tmp/**",
+		"**/*.d.ts",
+		"**/*.json"
+	],
+	"overrides": [
+		{
+			"files": ["**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs}"],
+			"rules": {
+				"max-depth": ["error", { "max": 3 }],
+				"max-params": ["error", { "max": 3 }],
+				"max-lines": ["error", { "max": 500 }],
+				"max-lines-per-function": ["error", { "max": 80 }],
+				"max-statements": ["error", { "max": 24 }],
+				"max-nested-callbacks": ["error", { "max": 3 }],
+				"max-classes-per-file": ["error", { "max": 1, "ignoreExpressions": true }],
+				"curly": ["error", "all"],
+				"no-else-return": ["error", { "allowElseIf": false }],
+				"inhuman/require-guard-clauses": "error",
+				"inhuman/no-swallowed-catch": "error",
+				"inhuman/export-code-last": "error",
+				"inhuman/no-empty-wrappers": "error",
+				"inhuman/no-switch": "error",
+				"inhuman/no-else": "error",
+				"oxc/no-barrel-file": "error",
+				"typescript/no-wrapper-object-types": "error",
+				"typescript/no-restricted-types": [
+					"error",
+					{
+						"types": {
+							"object": {
+								"message": "Use a specific object shape. If the data is already typed, prefer generics. Reserve unknown as a last resort for incoming external data before validation."
+							},
+							"Object": {
+								"message": "Use a specific object shape. If the data is already typed, prefer generics. Reserve unknown as a last resort for incoming external data before validation."
+							},
+							"Function": {
+								"message": "Declare the callable signature explicitly."
+							}
+						}
+					}
+				],
+				"typescript/consistent-type-assertions": [
+					"error",
+					{ "assertionStyle": "never" }
+				],
+				"typescript/no-non-null-assertion": "error",
+				"typescript/no-unnecessary-type-assertion": "error",
+				"typescript/no-unsafe-type-assertion": "error",
+				"typescript/non-nullable-type-assertion-style": "error"
+			}
+		},
+		{
+			"files": [
+				"**/*.test.{ts,tsx,cts,mts,js,jsx,cjs,mjs}",
+				"**/__tests__/**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs}",
+				"**/test/**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs}",
+				"**/tests/**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs}"
+			],
+			"rules": {
+				"max-depth": ["error", { "max": 4 }],
+				"max-params": ["error", { "max": 5 }],
+				"max-lines": ["error", { "max": 750 }]
+			}
+		}
+	]
+}

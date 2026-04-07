@@ -1,0 +1,51 @@
+{
+	$use: "./node_modules/.bin",
+
+	// Check formatter scope for runtime and test TypeScript sources.
+	format: {
+		name: "Check formatted code",
+		match: ["index.ts", "src/**/*.ts", "tests/**/*.ts", "dprint.json"],
+		critical: true,
+		run: "dprint check",
+	},
+
+	// Run the strict Oxlint baseline with type-aware rules and the repo's config.
+	lint: {
+		name: "Lint TypeScript",
+		match: ["index.ts", "src/**/*.ts", "tests/**/*.ts", ".oxlintrc.json", "tsconfig.json"],
+		critical: true,
+		run: "oxlint --config .oxlintrc.json --type-aware .",
+	},
+
+	// Keep runtime duplication at zero.
+	dupRuntime: {
+		name: "Check runtime duplication",
+		match: ["index.ts", "src/**/*.ts", ".jscpd.json"],
+		critical: true,
+		run: "jscpd --config .jscpd.json --exitCode 1 .",
+	},
+
+	// Keep test duplication at zero with a higher token floor for fixtures.
+	dupTests: {
+		name: "Check test duplication",
+		match: ["tests/**/*.ts", ".jscpd.tests.json"],
+		critical: true,
+		run: "jscpd --config .jscpd.tests.json --exitCode 1 .",
+	},
+
+	// Verify the package graph and entry surface stay aligned with the code.
+	deps: {
+		name: "Check package graph",
+		match: ["package.json", "index.ts", "src/**/*.ts", "tests/**/*.ts", "knip.json", "tsconfig.json"],
+		critical: true,
+		run: "knip --config knip.json --no-progress",
+	},
+
+	// Run the direct Node test suite for runtime behavior.
+	test: {
+		name: "Run Node tests",
+		match: ["package.json", "index.ts", "src/**/*.ts", "tests/**/*.ts"],
+		critical: true,
+		run: "node --test tests/*.test.ts",
+	},
+}
