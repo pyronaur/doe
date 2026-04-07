@@ -74,7 +74,7 @@ export const IC_CONFIG = [
 		role: "research",
 		defaults: {
 			model: "gpt-5.3-codex-spark",
-			effort: "low",
+			effort: "high",
 			allowWrite: false,
 		},
 	},
@@ -97,4 +97,3 @@ export const IC_CONFIG = [
 		},
 	},
 ] as const satisfies readonly ICConfig[];
-
