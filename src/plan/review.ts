@@ -1,24 +1,52 @@
 import { spawn } from "node:child_process";
-
-const PLAN_APPROVED_FEEDBACK = "No feedback provided.";
+import { readFileSync } from "node:fs";
 
 export interface DoePlanReviewResult {
 	status: "approved" | "needs_revision";
 	feedback: string | null;
 }
 
-export function parsePlanReviewResult(stdout: string): DoePlanReviewResult {
-	const feedback = stdout.trim();
-	if (!feedback || feedback === PLAN_APPROVED_FEEDBACK) {
+interface PlannotatorReviewOutput {
+	hookSpecificOutput?: {
+		decision?: {
+			behavior?: string;
+			message?: string;
+		};
+	};
+}
+
+export function parsePlannotatorReviewResult(stdout: string): DoePlanReviewResult {
+	let output: PlannotatorReviewOutput;
+	try {
+		output = JSON.parse(stdout.trim()) as PlannotatorReviewOutput;
+	} catch {
+		throw new Error("Plannotator review output was not valid JSON.");
+	}
+
+	const behavior = output.hookSpecificOutput?.decision?.behavior;
+	if (behavior === "allow") {
 		return {
 			status: "approved",
 			feedback: null,
 		};
 	}
-	return {
-		status: "needs_revision",
-		feedback,
-	};
+
+	if (behavior === "deny") {
+		return {
+			status: "needs_revision",
+			feedback: output.hookSpecificOutput?.decision?.message ?? "",
+		};
+	}
+
+	throw new Error("Plannotator review output did not include a decision.");
+}
+
+export function buildPlannotatorRequest(planFilePath: string): string {
+	return JSON.stringify({
+		tool_input: {
+			plan: readFileSync(planFilePath, "utf-8"),
+		},
+	});
 }
 
 export async function runPlanReviewCli(input: {
@@ -26,14 +54,16 @@ export async function runPlanReviewCli(input: {
 	cwd: string;
 	signal?: AbortSignal;
 }): Promise<DoePlanReviewResult> {
+	const payload = buildPlannotatorRequest(input.planFilePath);
+
 	return new Promise((resolve, reject) => {
-		const child = spawn("plannotator", ["annotate", input.planFilePath], {
+		const child = spawn("plannotator", [], {
 			cwd: input.cwd,
 			env: {
 				...process.env,
 				PLANNOTATOR_CWD: input.cwd,
 			},
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["pipe", "pipe", "pipe"],
 		});
 
 		let stdout = "";
@@ -58,6 +88,8 @@ export async function runPlanReviewCli(input: {
 
 		input.signal?.addEventListener("abort", handleAbort, { once: true });
 
+		child.stdin.write(payload);
+		child.stdin.end();
 		child.stdout.on("data", (chunk) => {
 			stdout += String(chunk);
 		});
@@ -70,7 +102,17 @@ export async function runPlanReviewCli(input: {
 		child.on("close", (code, signal) => {
 			finish(() => {
 				if (code === 0) {
-					resolve(parsePlanReviewResult(stdout));
+					try {
+						resolve(parsePlannotatorReviewResult(stdout));
+						return;
+					} catch (error) {
+						reject(
+							new Error(
+								`Plannotator review returned an invalid decision: ${error instanceof Error ? error.message : String(error)}`,
+							),
+						);
+						return;
+					}
 					return;
 				}
 				const reason = stderr.trim() || stdout.trim() || `exit code ${code ?? "null"}, signal ${signal ?? "null"}`;
