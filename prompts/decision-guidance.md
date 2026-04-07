@@ -32,14 +32,6 @@ Match the IC's skill level to the task. Getting it wrong costs time and money.
 - Do not silently reopen finished work. Use `reuseFinished=true` only when DOE explicitly wants the last finished seat context.
 - If a seat is occupied and non-running, finish it intentionally with `codex_finalize` when the seat should be released.
 
-## Tool choice after worker completion
-- After `codex_spawn` or `codex_resume`, use the returned `content` as the worker's result.
-- Do not call `codex_inspect` just to read a completed worker's answer.
-- Use `codex_inspect` only when you need follow-up lookup beyond the returned worker result.
-- `codex_inspect(action="index")` → workstream overview, state, previews, touched files.
-- `codex_inspect(action="files")` → changed-file and LOC lookup.
-- `codex_inspect(action="query", query="...")` → targeted thread-history lookup.
-- `codex_inspect(action="transcript")` or `action="raw"` → explicit transcript/debug needs only.
 
 ## Agent promotion
 - Research agents start read-only
