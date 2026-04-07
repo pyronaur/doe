@@ -55,3 +55,33 @@ test("single-agent spawn render body uses the full tool result instead of a coll
 
 	assert.equal(text, "ic: Tony\nstate: completed\ncapacity: 22%");
 });
+
+test("single-agent spawn result strips shared session context preamble from displayed prompt", () => {
+	const text = formatSpawnAgentResult(createAgent(), {
+		prompt: [
+			"Shared session context:",
+			"- Session slug: doe-roster-ui",
+			"- Shared knowledgebase directory: /Users/n14/.n/.tmp/doe-roster-ui",
+			"- Reuse that shared directory for any notes or artifacts that belong to this DoE session.",
+			"",
+			"Implement the roster card fix.",
+		].join("\n"),
+	});
+
+	assert.match(text, /prompt:\nImplement the roster card fix\./);
+	assert.doesNotMatch(text, /Shared session context:/);
+});
+
+test("single-agent spawn result does not show queued placeholder when no final output is present", () => {
+	const text = formatSpawnAgentResult(
+		createAgent({
+			latestFinalOutput: "queued: Shared session context: ...",
+			latestSnippet: "queued: Shared session context: ...",
+			messages: [],
+		}),
+		{ prompt: "Investigate why cards show queued output." },
+	);
+
+	assert.match(text, /result:\nCompleted/);
+	assert.doesNotMatch(text, /result:\nqueued:/);
+});

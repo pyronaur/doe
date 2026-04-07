@@ -11,6 +11,26 @@ interface SpawnResultMessage {
 	};
 }
 
+function stripSharedSessionContext(prompt: string): string {
+	const normalized = prompt.replace(/\r\n?/g, "\n").trim();
+	if (!normalized.startsWith("Shared session context:")) {
+		return normalized;
+	}
+	const lines = normalized.split("\n");
+	if (lines[0]?.trim() !== "Shared session context:") {
+		return normalized;
+	}
+	let index = 1;
+	while (index < lines.length && lines[index].trim() !== "") {
+		index += 1;
+	}
+	while (index < lines.length && lines[index].trim() === "") {
+		index += 1;
+	}
+	const stripped = lines.slice(index).join("\n").trim();
+	return stripped || normalized;
+}
+
 function summarizeAgents(agents: Array<any>, maxSnippet = 120): string {
 	return agents
 		.map((agent) =>
@@ -22,7 +42,7 @@ function summarizeAgents(agents: Array<any>, maxSnippet = 120): string {
 }
 
 export function formatSpawnAgentResult(agent: any, input: { prompt?: string | null } = {}): string {
-	const prompt = input.prompt?.trim() || "(prompt unavailable)";
+	const prompt = input.prompt ? stripSharedSessionContext(input.prompt) : "(prompt unavailable)";
 	return [
 		`ic: ${agent.name}`,
 		`state: ${agent.state}`,
