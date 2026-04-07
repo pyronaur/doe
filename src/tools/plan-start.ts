@@ -7,12 +7,14 @@ import { truncateForDisplay } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import type { DoePlanState } from "../plan/session-state.js";
 import {
+	deletePlanFileIfEmpty,
 	ensurePlanFile,
 	formatPlanReviewCommand,
 	formatPlanReuseError,
 	getSharedKnowledgebaseContext,
 	preparePlanFile,
 	readPlanFile,
+	readPlanTemplateDefaults,
 	renderPlanPrompt,
 } from "../plan/flow.js";
 import type { DoeRegistry } from "../roster/registry.js";
@@ -78,7 +80,8 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 			if (planFile.requiresAllowExisting) {
 				throw new Error(formatPlanReuseError(planFile));
 			}
-			ensurePlanFile(planFile.planFilePath);
+			const ensuredPlanFile = ensurePlanFile(planFile.planFilePath);
+			const templateDefaults = readPlanTemplateDefaults(deps.templatesDir);
 
 			const prompt = renderPlanPrompt({
 				templatesDir: deps.templatesDir,
@@ -98,8 +101,8 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 				id: agentId,
 				name: seat.name,
 				cwd: repoRoot,
-				model: "gpt-5.4",
-				effort: "medium",
+				model: templateDefaults.model,
+				effort: templateDefaults.effort,
 				template: "plan",
 				allowWrite: true,
 				threadId: null,
@@ -135,7 +138,6 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 						ic: seat.name,
 						agentId,
 						threadId: null,
-						startedAt,
 					},
 				}),
 				{ flush: true },
@@ -148,7 +150,7 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 
 			try {
 				const thread = await deps.client.startThread({
-					model: "gpt-5.4",
+					model: templateDefaults.model,
 					cwd: repoRoot,
 					approvalPolicy: "never",
 					networkAccess: false,
@@ -173,8 +175,8 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 					threadId: thread.thread.id,
 					prompt,
 					cwd: repoRoot,
-					model: "gpt-5.4",
-					effort: "medium",
+					model: templateDefaults.model,
+					effort: templateDefaults.effort,
 					approvalPolicy: "never",
 					networkAccess: false,
 					allowWrite: true,
@@ -191,6 +193,9 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 					}),
 					{ flush: true },
 				);
+				if (ensuredPlanFile.created) {
+					deletePlanFileIfEmpty(ensuredPlanFile.path);
+				}
 				throw error;
 			}
 

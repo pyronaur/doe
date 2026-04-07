@@ -135,6 +135,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 		registerPlanResumeTool(pi, {
 			client,
 			registry,
+			templatesDir: TEMPLATES_DIR,
 			getSessionSlug: () => pi.getSessionName() ?? null,
 			getPlanState: () => clonePlanState(getRuntime().planState),
 			setPlanState: updatePlanState,

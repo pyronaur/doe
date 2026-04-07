@@ -9,6 +9,7 @@ import {
 	formatPlanReviewCommand,
 	getSharedKnowledgebaseContext,
 	readPlanFile,
+	readPlanTemplateDefaults,
 } from "../plan/flow.js";
 import type { DoePlanState } from "../plan/session-state.js";
 import type { DoeRegistry } from "../roster/registry.js";
@@ -16,6 +17,7 @@ import type { DoeRegistry } from "../roster/registry.js";
 interface PlanResumeToolDeps {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
+	templatesDir: string;
 	getSessionSlug: () => string | null;
 	getPlanState: () => DoePlanState;
 	setPlanState: (updater: (state: DoePlanState) => DoePlanState, options?: { flush?: boolean }) => DoePlanState;
@@ -67,6 +69,7 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 			}
 
 			const shared = getSharedKnowledgebaseContext(process.cwd(), sessionSlug);
+			const templateDefaults = readPlanTemplateDefaults(deps.templatesDir);
 			const prompt = buildPlanResumePrompt({
 				feedback: params.feedback,
 				commentary: params.commentary,
@@ -76,6 +79,8 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 
 			deps.registry.upsertAgent({
 				...agent,
+				model: templateDefaults.model,
+				effort: templateDefaults.effort,
 				template: "plan",
 				allowWrite: true,
 				state: "working",
@@ -101,7 +106,7 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 				await deps.client.resumeThread({
 					threadId: agent.threadId,
 					cwd: agent.cwd,
-					model: agent.model,
+					model: templateDefaults.model,
 					approvalPolicy: "never",
 					allowWrite: true,
 				});
@@ -109,8 +114,8 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 					threadId: agent.threadId,
 					prompt,
 					cwd: agent.cwd,
-					model: agent.model,
-					effort: (agent.effort as any) ?? "medium",
+					model: templateDefaults.model,
+					effort: templateDefaults.effort,
 					approvalPolicy: "never",
 					networkAccess: false,
 					allowWrite: true,

@@ -1,5 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { ReasoningEffort } from "../codex/client.js";
+import { readOptionalModelId } from "../codex/model-selection.js";
 import type { MarkdownDoc } from "../templates/loader.js";
 import { loadMarkdownDocs, renderMarkdownTemplate } from "../templates/loader.js";
 import { getPlanFilePath, getSessionWorkspacePath, normalizePlanSlug } from "./slug.js";
@@ -14,6 +16,16 @@ export interface PreparedPlanFile {
 	planFilePath: string;
 	exists: boolean;
 	requiresAllowExisting: boolean;
+}
+
+export interface EnsuredPlanFile {
+	path: string;
+	created: boolean;
+}
+
+export interface PlanTemplateDefaults {
+	model: string;
+	effort: ReasoningEffort;
 }
 
 function findTemplateDoc(templatesDir: string, templateName: string): MarkdownDoc {
@@ -59,11 +71,20 @@ export function preparePlanFile(input: {
 	};
 }
 
-export function ensurePlanFile(path: string): void {
+export function ensurePlanFile(path: string): EnsuredPlanFile {
+	const created = !existsSync(path);
 	mkdirSync(dirname(path), { recursive: true });
-	if (!existsSync(path)) {
+	if (created) {
 		writeFileSync(path, "", "utf-8");
 	}
+	return { path, created };
+}
+
+export function deletePlanFileIfEmpty(path: string): void {
+	if (!existsSync(path)) return;
+	const text = readFileSync(path, "utf-8");
+	if (text.trim().length > 0) return;
+	unlinkSync(path);
 }
 
 export function readPlanFile(path: string): string {
@@ -93,6 +114,19 @@ export function renderPlanPrompt(input: {
 		planFilePath: input.planFilePath,
 		sharedKnowledgebasePath: input.sharedKnowledgebasePath,
 	}).trim();
+}
+
+export function readPlanTemplateDefaults(templatesDir: string): PlanTemplateDefaults {
+	const doc = findTemplateDoc(templatesDir, "plan");
+	const model = readOptionalModelId(doc.attributes.default_model, `template "${doc.name}" default_model`) ?? "gpt-5.4";
+	const effort = doc.attributes.default_effort;
+	if (effort !== "low" && effort !== "medium" && effort !== "high" && effort !== "xhigh") {
+		throw new Error(`Template "${doc.name}" must define default_effort as one of: low, medium, high, xhigh.`);
+	}
+	return {
+		model,
+		effort,
+	};
 }
 
 export function formatPlanReuseError(result: PreparedPlanFile): string {

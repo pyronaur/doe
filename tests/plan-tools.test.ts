@@ -58,8 +58,8 @@ function createPlanTemplate(templatesDir: string) {
 		join(templatesDir, "plan.md"),
 		[
 			"---",
-			"default_model: gpt-5.4",
-			"default_effort: medium",
+			"default_model: gpt-5.4-mini",
+			"default_effort: high",
 			"---",
 			"Shared knowledgebase directory: {{sharedKnowledgebasePath}}",
 			"Write the plan only to: {{planFilePath}}",
@@ -162,6 +162,12 @@ class FakePlanClient {
 	}
 }
 
+class FailingStartThreadClient extends FakePlanClient {
+	override async startThread(_options: Record<string, unknown>) {
+		throw new Error("startThread failed");
+	}
+}
+
 async function createToolHarness(input: {
 	registry: DoeRegistry;
 	client: FakePlanClient;
@@ -188,6 +194,7 @@ async function createToolHarness(input: {
 	registerPlanResumeTool(pi, {
 		client: input.client as any,
 		registry: input.registry,
+		templatesDir: input.templatesDir,
 		getSessionSlug: () => "feature-x",
 		getPlanState: input.getPlanState,
 		setPlanState: (updater) => input.setPlanState(updater),
@@ -239,11 +246,15 @@ test("plan_start requires an explicit IC, writes the plan file, and returns the 
 		assert.equal(planState.activePlan?.threadId, "thread-1");
 		assert.ok(existsSync(planFilePath));
 		assert.match(readFileSync(planFilePath, "utf-8"), /Initial plan/);
+		assert.equal(client.threadCalls[0]?.model, "gpt-5.4-mini");
+		assert.equal((client.turnCalls as Array<{ threadId: string; prompt: string } | undefined>)[0] ? true : false, true);
 		assert.match(result.content[0].text, /ic: Hope/);
 		assert.match(result.content[0].text, /next_step: !plannotator annotate /);
 		assert.equal(result.details.ic, "Hope");
 		assert.equal(result.details.nextStep, `!plannotator annotate ${planFilePath}`);
 		assert.match(client.turnCalls[0]!.prompt, /Write the plan only to:/);
+		assert.equal(registry.findAgent(planState.activePlan?.agentId ?? "")?.model, "gpt-5.4-mini");
+		assert.equal(registry.findAgent(planState.activePlan?.agentId ?? "")?.effort, "high");
 	} finally {
 		process.chdir(previousCwd);
 	}
@@ -289,6 +300,7 @@ test("plan_resume reuses the same IC, thread, and plan file with explicit feedba
 		assert.equal(planState.activePlan?.threadId, "thread-1");
 		assert.match(planFilePath, /\/\.tmp\/feature-x\/plan-auth-refactor\.md$/);
 		assert.equal(client.resumeCalls.length, 1);
+		assert.equal(client.resumeCalls[0]?.model, "gpt-5.4-mini");
 		assert.match(client.turnCalls[1]!.prompt, /CTO Review Feedback/);
 		assert.match(client.turnCalls[1]!.prompt, /Add rollout and testing\./);
 		assert.match(client.turnCalls[1]!.prompt, /Keep scope tight\./);
@@ -317,7 +329,7 @@ test("plan_stop interrupts the active plan and clears the single active plan sta
 	);
 	const client = new FakePlanClient(registry, []);
 	let planState: DoePlanState = {
-		version: 2,
+		version: 3,
 		sessionSlugReminderSentAtTurn: null,
 		activePlan: {
 			planSlug: "auth-refactor",
@@ -325,7 +337,6 @@ test("plan_stop interrupts the active plan and clears the single active plan sta
 			ic: "Hope",
 			agentId: "agent-1",
 			threadId: "thread-1",
-			startedAt: 1,
 		},
 	};
 	const tools = await createToolHarness({
@@ -346,4 +357,62 @@ test("plan_stop interrupts the active plan and clears the single active plan sta
 	assert.equal(registry.findAgent("agent-1")?.state, "awaiting_input");
 	assert.equal(result.details.interrupted, true);
 	assert.match(result.content[0].text, /Stopped planning workflow for auth-refactor\./);
+});
+
+test("plan_start retry after failed launch does not require allowExisting and does not leave an empty plan file behind", { concurrency: false }, async () => {
+	const repoRoot = mkdtempSync(join(tmpdir(), "doe-plan-tools-"));
+	const templatesDir = join(repoRoot, "templates");
+	createPlanTemplate(templatesDir);
+	const registry = new DoeRegistry();
+	let planState = createEmptyPlanState();
+	const failingClient = new FailingStartThreadClient(registry, []);
+	const tools = await createToolHarness({
+		registry,
+		client: failingClient,
+		templatesDir,
+		getPlanState: () => planState,
+		setPlanState: (updater) => {
+			planState = updater(planState);
+			return planState;
+		},
+	});
+	const previousCwd = process.cwd();
+	process.chdir(repoRoot);
+
+	try {
+		await assert.rejects(
+			tools.start.execute("tool-4", {
+				ic: "Hope",
+				planSlug: "auth refactor",
+				prompt: "Plan the auth rewrite.",
+			}, undefined),
+			/startThread failed/,
+		);
+
+		const planFilePath = join(repoRoot, ".tmp", "feature-x", "plan-auth-refactor.md");
+		assert.equal(planState.activePlan, null);
+		assert.equal(existsSync(planFilePath), false);
+
+		const retryClient = new FakePlanClient(registry, ["# Draft\n\nRetry plan.\n"]);
+		const retryTools = await createToolHarness({
+			registry,
+			client: retryClient,
+			templatesDir,
+			getPlanState: () => planState,
+			setPlanState: (updater) => {
+				planState = updater(planState);
+				return planState;
+			},
+		});
+		const retry = await retryTools.start.execute("tool-5", {
+			ic: "Hope",
+			planSlug: "auth refactor",
+			prompt: "Plan the auth rewrite.",
+		}, undefined);
+
+		assert.match(retry.content[0].text, /next_step: !plannotator annotate /);
+		assert.equal(existsSync(planState.activePlan?.planFilePath ?? ""), true);
+	} finally {
+		process.chdir(previousCwd);
+	}
 });

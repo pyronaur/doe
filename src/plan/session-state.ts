@@ -1,5 +1,5 @@
 export const DOE_PLAN_STATE_TYPE = "doe-plan-state";
-export const DOE_PLAN_STATE_VERSION = 2;
+export const DOE_PLAN_STATE_VERSION = 3;
 
 export interface DoeActivePlanState {
 	planSlug: string;
@@ -7,7 +7,6 @@ export interface DoeActivePlanState {
 	ic: string | null;
 	agentId: string | null;
 	threadId: string | null;
-	startedAt: number;
 }
 
 export interface DoePlanState {
@@ -35,15 +34,13 @@ function normalizeActivePlanState(value: unknown): DoeActivePlanState | null {
 	const input = value as Record<string, unknown>;
 	const planSlug = asString(input.planSlug);
 	const planFilePath = asString(input.planFilePath);
-	const startedAt = asFiniteNumber(input.startedAt);
-	if (!planSlug || !planFilePath || startedAt === null) return null;
+	if (!planSlug || !planFilePath) return null;
 	return {
 		planSlug,
 		planFilePath,
 		ic: asString(input.ic),
 		agentId: asString(input.agentId),
 		threadId: asString(input.threadId),
-		startedAt,
 	};
 }
 
