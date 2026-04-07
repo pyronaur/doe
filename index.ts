@@ -14,6 +14,7 @@ import {
 } from "./src/plan/session-state.js";
 import { runPlanReviewCli } from "./src/plan/review.js";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./src/plan/reminder.js";
+import { IC_CONFIG } from "./src/roster/config.js";
 import { DoeRegistry } from "./src/roster/registry.js";
 import type { PersistedRegistrySnapshot, RegistryEvent } from "./src/roster/types.js";
 import { AgentLiveViewController } from "./src/ui/agent-live-view.js";
@@ -80,6 +81,25 @@ function latestSnapshot(ctx: ExtensionContext): PersistedRegistrySnapshot | null
 		}
 	}
 	return null;
+}
+
+export function formatCompactRosterSummary(): string {
+	const grouped = new Map<string, string[]>();
+	for (const ic of IC_CONFIG) {
+		const names = grouped.get(ic.role) ?? [];
+		names.push(ic.name);
+		grouped.set(ic.role, names);
+	}
+	return `IC roster: ${Array.from(grouped.entries())
+		.map(([role, names]) => `${role}: ${names.join(", ")}`)
+		.join(" | ")}`;
+}
+
+export async function buildGuidanceMessage(): Promise<string> {
+	const system = loadMarkdownDoc(join(PROMPTS_DIR, "doe-system.md"))?.body?.trim() ?? "";
+	const decision = loadMarkdownDoc(join(PROMPTS_DIR, "decision-guidance.md"))?.body?.trim() ?? "";
+	const roster = formatCompactRosterSummary();
+	return [system, decision, roster].filter((part) => part.length > 0).join("\n\n");
 }
 
 export default function doeExtension(pi: ExtensionAPI) {
@@ -240,12 +260,6 @@ export default function doeExtension(pi: ExtensionAPI) {
 		ctx.ui.setStatus("doe", ctx.ui.theme.fg("accent", formatDoeStatus(runtime.registry)));
 		ctx.ui.setWidget("doe-active", undefined, { placement: "aboveEditor" });
 		runtime.liveView.requestRender();
-	}
-
-	async function buildGuidanceMessage(): Promise<string> {
-		const system = loadMarkdownDoc(join(PROMPTS_DIR, "doe-system.md"))?.body?.trim() ?? "";
-		const decision = loadMarkdownDoc(join(PROMPTS_DIR, "decision-guidance.md"))?.body?.trim() ?? "";
-		return [system, decision].filter((part) => part.length > 0).join("\n\n");
 	}
 
 	function buildPlanRevisionReminder() {
