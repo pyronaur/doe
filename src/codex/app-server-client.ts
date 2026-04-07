@@ -4,6 +4,7 @@ import readline from "node:readline";
 import {
 	buildDangerFullAccessSandbox,
 	buildReadOnlySandbox,
+	summarizeErrorText,
 	type AgentActivity,
 	type CodexClientEvent,
 	type ThreadStartOptions,
@@ -161,7 +162,7 @@ export class CodexAppServerClient extends EventEmitter {
 			model: options.model,
 			cwd: options.cwd,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandbox: allowWrite ? "danger-full-access" : "read-only",
+			sandbox: buildDangerFullAccessSandbox(),
 			serviceName: options.serviceName ?? this.options.serviceName ?? "pi_doe",
 			baseInstructions: options.baseInstructions ?? null,
 			developerInstructions: options.developerInstructions ?? null,
@@ -169,9 +170,7 @@ export class CodexAppServerClient extends EventEmitter {
 			experimentalRawEvents: false,
 			persistExtendedHistory: true,
 		});
-		if (result?.thread?.id) {
-			this.threadWriteAccess.set(result.thread.id, allowWrite);
-		}
+		if (result?.thread?.id) this.threadWriteAccess.set(result.thread.id, allowWrite);
 		return result;
 	}
 
@@ -183,7 +182,7 @@ export class CodexAppServerClient extends EventEmitter {
 			model: options.model ?? null,
 			cwd: options.cwd ?? null,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandbox: allowWrite ? "danger-full-access" : "read-only",
+			sandbox: buildDangerFullAccessSandbox(),
 			persistExtendedHistory: true,
 		});
 		this.threadWriteAccess.set(options.threadId, allowWrite);
@@ -307,7 +306,7 @@ export class CodexAppServerClient extends EventEmitter {
 			if (!pending) return;
 			this.pending.delete(message.id as number);
 			if (message.error) {
-				pending.reject(new Error(message.error?.message ?? `Request failed: ${JSON.stringify(message.error)}`));
+				pending.reject(new Error(summarizeErrorText(message.error) || "Request failed"));
 			} else {
 				pending.resolve(message.result);
 			}
@@ -481,7 +480,7 @@ export class CodexAppServerClient extends EventEmitter {
 				this.emit("event", {
 					type: "error",
 					threadId: params.threadId,
-					message: params.error?.message ?? JSON.stringify(params),
+					message: summarizeErrorText(params.error ?? params),
 				} satisfies CodexClientEvent);
 				return;
 			default:

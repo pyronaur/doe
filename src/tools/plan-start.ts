@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { truncateForDisplay } from "../codex/client.js";
+import { summarizeErrorText, truncateForDisplay } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import type { DoePlanState } from "../plan/session-state.js";
 import {
@@ -204,7 +204,7 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 				deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
 				deps.registry.appendUserMessage(agentId, turn.turn.id, prompt);
 			} catch (error) {
-				deps.registry.markAgentError(agentId, error instanceof Error ? error.message : String(error));
+				deps.registry.markAgentError(agentId, summarizeErrorText(error));
 				deps.setPlanState(
 					(current) => ({
 						...current,
