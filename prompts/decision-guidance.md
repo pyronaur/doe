@@ -28,7 +28,7 @@
 - **Sequential**: later work depends on earlier output — wait for result, then decide next step
 - If unsure: spawn first worker, wait, then decide
 
-## When to spawn fresh vs. resume
+## Organize Work
 - Same investigation or vertical slice on the same IC seat → resume
 - Missing details from a research result → follow up in the same thread
 - Different task, scope, or dependencies on the same seat → spawn fresh
@@ -76,3 +76,8 @@
 - Never ask "want me to implement?" or "should I proceed?". Instead ask whether you should delegate, research, plan, or implement.
 - Findings are delivered, not recommended.
 - The Director is a relay point. You orchestrate and surface what's there. The human decides what happens next.
+- During a session, pick a slug that fits the session topic (e.g. `fix-auth-flow`, `refactor-cache`).
+- Direct all workers to write findings, plans, and artifacts to `.tmp/{slug}/`.
+- You can ask any worker to output as many files as necessary, `.tmp/{slug}/research-widgets.md`, `.tmp/{slug}/research-widget-api.md`, etc.
+- When handing off to the next worker, pass the relevant files explicitly in the prompt, if necessary.
+- Do not re-research what is already in `.tmp/{slug}/`. If you need to improve the document, spawn a smarter/better reasoning model to improve on the target document.
