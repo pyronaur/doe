@@ -318,11 +318,17 @@ export function primaryActiveAgent(registry: DoeRegistry) {
 }
 
 export function formatCompactRosterSummary(): string {
+	const roleLabels: Record<(typeof IC_CONFIG)[number]["role"], string> = {
+		senior: "senior",
+		mid: "mid",
+		researcher: "research",
+	};
 	const grouped = new Map<string, string[]>();
 	for (const ic of IC_CONFIG) {
-		const names = grouped.get(ic.role) ?? [];
+		const role = roleLabels[ic.role];
+		const names = grouped.get(role) ?? [];
 		names.push(ic.name);
-		grouped.set(ic.role, names);
+		grouped.set(role, names);
 	}
 	return `IC roster: ${
 		Array.from(grouped.entries())
