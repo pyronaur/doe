@@ -1,9 +1,5 @@
 import type { AgentActivity, ReasoningEffort } from "../codex/client.js";
-import type {
-	CurrentContextUsage,
-	AgentCompactionState,
-	AgentUsageSnapshot,
-} from "../context-usage.js";
+import type { AgentCompactionState, AgentUsageSnapshot } from "../context-usage.js";
 
 export type AgentLifecycleState = "working" | "completed" | "error" | "awaiting_input" | "finalized";
 export type NotificationMode = "wait_all" | "notify_each";
@@ -18,7 +14,6 @@ export interface ICDefaults {
 }
 
 export interface ICConfig {
-	slug: string;
 	name: string;
 	role: ICRole;
 	defaults: ICDefaults;
@@ -121,4 +116,3 @@ export type RegistryEvent =
 	| { type: "agent-terminal"; agent: AgentRecord }
 	| { type: "batch-completed"; batch: BatchRecord; agents: AgentRecord[] };
 
-export type ContextUsage = CurrentContextUsage;

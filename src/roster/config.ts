@@ -16,7 +16,6 @@ export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {
  */
 export const IC_CONFIG = [
 	{
-		slug: "tony",
 		name: "Tony",
 		role: "senior",
 		defaults: {
@@ -26,7 +25,6 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		slug: "bruce",
 		name: "Bruce",
 		role: "senior",
 		defaults: {
@@ -36,7 +34,6 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		slug: "strange",
 		name: "Strange",
 		role: "senior",
 		defaults: {
@@ -46,7 +43,6 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		slug: "peter",
 		name: "Peter",
 		role: "mid",
 		defaults: {
@@ -56,7 +52,6 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		slug: "sam",
 		name: "Sam",
 		role: "mid",
 		defaults: {
@@ -66,7 +61,6 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		slug: "scott",
 		name: "Scott",
 		role: "mid",
 		defaults: {
@@ -76,7 +70,6 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		slug: "hope",
 		name: "Hope",
 		role: "research",
 		defaults: {
@@ -86,7 +79,6 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		slug: "jane",
 		name: "Jane",
 		role: "research",
 		defaults: {
@@ -96,7 +88,6 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		slug: "pepper",
 		name: "Pepper",
 		role: "research",
 		defaults: {
