@@ -27,11 +27,9 @@ test("default roster queries show occupied seats in role order", () => {
 	assert.deepEqual(
 		summaries.map((entry) => `${entry.role}:${entry.activeCount}:${entry.names.join(",")}`),
 		[
-			"researcher:1:Tony",
-			"senior:0:",
+			"senior:1:Tony",
 			"mid:1:Peter",
-			"junior:0:",
-			"intern:1:Hope",
+			"researcher:1:Hope",
 			"contractor:0:",
 		],
 	);
@@ -61,11 +59,9 @@ test("roster history opts in released seats while default remains occupied-only"
 	assert.deepEqual(
 		summaries.map((entry) => `${entry.role}:${entry.activeCount}:${entry.names.join(",")}`),
 		[
-			"researcher:1:Tony",
-			"senior:0:",
+			"senior:1:Tony",
 			"mid:0:",
-			"junior:0:",
-			"intern:1:Hope",
+			"researcher:1:Hope",
 			"contractor:0:",
 		],
 	);

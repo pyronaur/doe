@@ -1,17 +1,15 @@
 import type { ICConfig, ICRole, SeatRole } from "./types.ts";
 
 export const IC_ROLES = [
-	"researcher",
 	"senior",
 	"mid",
-	"junior",
-	"intern",
+	"researcher",
 ] as const satisfies readonly ICRole[];
 export const SEAT_ROLES = [...IC_ROLES, "contractor"] as const satisfies readonly SeatRole[];
 
 export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {
-	researcher: "Researchers",
-	senior: "Senior Developers",
+	researcher: "Researchers/Assistants",
+	senior: "Seniors",
 	mid: "Mid-level Engineers",
 	junior: "Junior Engineers",
 	intern: "Interns",
@@ -21,28 +19,11 @@ export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {
 /**
  * Built-in IC configurations.
  * Ordered for roster display and first-available assignment preference.
+ * Fixed 3x3 grouping: Seniors, Mid-level, Researchers/Assistants.
  */
 export const IC_CONFIG = [
 	{
-		name: "Pattern",
-		role: "researcher",
-		defaults: {
-			model: "gpt-5.4",
-			effort: "high",
-			allowWrite: true,
-		},
-	},
-	{
-		name: "Khriss",
-		role: "researcher",
-		defaults: {
-			model: "gpt-5.4",
-			effort: "high",
-			allowWrite: true,
-		},
-	},
-	{
-		name: "Jarvis",
+		name: "Tony",
 		role: "senior",
 		defaults: {
 			model: "gpt-5.3-codex",
@@ -51,7 +32,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Stark",
+		name: "Bruce",
 		role: "senior",
 		defaults: {
 			model: "gpt-5.3-codex",
@@ -60,7 +41,16 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Shadow",
+		name: "Strange",
+		role: "senior",
+		defaults: {
+			model: "gpt-5.3-codex",
+			effort: "high",
+			allowWrite: true,
+		},
+	},
+	{
+		name: "Peter",
 		role: "mid",
 		defaults: {
 			model: "gpt-5.4",
@@ -69,7 +59,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Echo",
+		name: "Sam",
 		role: "mid",
 		defaults: {
 			model: "gpt-5.4",
@@ -78,8 +68,17 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Dash",
-		role: "junior",
+		name: "Scott",
+		role: "mid",
+		defaults: {
+			model: "gpt-5.4",
+			effort: "medium",
+			allowWrite: true,
+		},
+	},
+	{
+		name: "Hope",
+		role: "researcher",
 		defaults: {
 			model: "gpt-5.4-mini",
 			effort: "medium",
@@ -87,8 +86,8 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Flash",
-		role: "junior",
+		name: "Jane",
+		role: "researcher",
 		defaults: {
 			model: "gpt-5.4-mini",
 			effort: "medium",
@@ -96,11 +95,11 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Spark",
-		role: "intern",
+		name: "Pepper",
+		role: "researcher",
 		defaults: {
-			model: "gpt-5.3-codex-spark",
-			effort: "low",
+			model: "gpt-5.4-mini",
+			effort: "medium",
 			allowWrite: false,
 		},
 	},

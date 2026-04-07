@@ -40,25 +40,6 @@ function updateActivePlan(
 	);
 }
 
-export function formatPlanReviewSummary(review: DoePlanReviewResult): string[] {
-	if (!review.feedback) {
-		return [];
-	}
-	return ["", "<review_feedback>", review.feedback, "</review_feedback>"];
-}
-
-export function formatPlanRevisionNextStep(review: DoePlanReviewResult): string[] {
-	if (review.status !== "needs_revision") {
-		return [];
-	}
-	return [
-		"",
-		"<next_step>",
-		"Review feedback is stored automatically. Use plan_resume with Director commentary only.",
-		"</next_step>",
-	];
-}
-
 function resolveAgentResponseTimestamp(agent: any): number | null {
 	if (!agent) {
 		return null;
@@ -87,6 +68,25 @@ function formatAgentResponseTimestamp(agent: any): string {
 		return "unknown";
 	}
 	return new Date(timestamp).toISOString();
+}
+
+export function formatPlanReviewSummary(review: DoePlanReviewResult): string[] {
+	if (!review.feedback) {
+		return [];
+	}
+	return ["", "<review_feedback>", review.feedback, "</review_feedback>"];
+}
+
+export function formatPlanRevisionNextStep(review: DoePlanReviewResult): string[] {
+	if (review.status !== "needs_revision") {
+		return [];
+	}
+	return [
+		"",
+		"<next_step>",
+		"Review feedback is stored automatically. Use plan_resume with Director commentary only.",
+		"</next_step>",
+	];
 }
 
 export function formatPlanProgressSummary(input: {

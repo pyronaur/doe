@@ -9,23 +9,23 @@ test("registry seeds fixed IC roster in role order", () => {
 	assert.deepEqual(
 		registry.listRosterSeats().map((seat) => `${seat.role}:${seat.name}`),
 		[
-			"researcher:Tony",
-			"researcher:Bruce",
+			"senior:Tony",
+			"senior:Bruce",
 			"senior:Strange",
-			"senior:Scott",
 			"mid:Peter",
 			"mid:Sam",
-			"junior:Jane",
-			"junior:Pepper",
-			"intern:Hope",
+			"mid:Scott",
+			"researcher:Hope",
+			"researcher:Jane",
+			"researcher:Pepper",
 		],
 	);
 });
 
 test("registry keeps seat models on named ICs", () => {
 	const registry = new DoeRegistry();
-	assert.equal(registry.findSeat("Tony")?.model, "gpt-5.4");
-	assert.equal(registry.findSeat("Hope")?.model, "gpt-5.3-codex-spark");
+	assert.equal(registry.findSeat("Tony")?.model, "gpt-5.3-codex");
+	assert.equal(registry.findSeat("Hope")?.model, "gpt-5.4-mini");
 });
 
 test("seat assignment requires an explicit IC or an explicit role", () => {
@@ -40,8 +40,9 @@ test("contractor assignments require an explicit model", () => {
 	const registry = new DoeRegistry();
 	registry.assignSeat({ agentId: "agent-1", role: "mid" });
 	registry.assignSeat({ agentId: "agent-2", role: "mid" });
+	registry.assignSeat({ agentId: "agent-3", role: "mid" });
 	assert.throws(
-		() => registry.assignSeat({ agentId: "agent-3", role: "mid" }),
+		() => registry.assignSeat({ agentId: "agent-4", role: "mid" }),
 		/Contractor assignments require an explicit model\./,
 	);
 });
@@ -50,9 +51,11 @@ test("contractor numbering is stable across serialize and restore", () => {
 	const registry = new DoeRegistry();
 	const peter = registry.assignSeat({ agentId: "agent-1", role: "mid" });
 	const sam = registry.assignSeat({ agentId: "agent-2", role: "mid" });
-	const contractor1 = registry.assignSeat({ agentId: "agent-3", role: "mid", model: "gpt-5.4" });
+	const scott = registry.assignSeat({ agentId: "agent-3", role: "mid" });
+	const contractor1 = registry.assignSeat({ agentId: "agent-4", role: "mid", model: "gpt-5.4" });
 	assert.equal(peter.name, "Peter");
 	assert.equal(sam.name, "Sam");
+	assert.equal(scott.name, "Scott");
 	assert.equal(contractor1.name, "contractor-1");
 
 	registry.upsertAgent(
@@ -69,6 +72,14 @@ test("contractor numbering is stable across serialize and restore", () => {
 	registry.upsertAgent(
 		createRegistryAgent({
 			id: "agent-3",
+			name: scott.name,
+			seatName: scott.name,
+			seatRole: scott.role,
+		}),
+	);
+	registry.upsertAgent(
+		createRegistryAgent({
+			id: "agent-4",
 			name: contractor1.name,
 			seatName: contractor1.name,
 			seatRole: contractor1.role,
@@ -77,7 +88,7 @@ test("contractor numbering is stable across serialize and restore", () => {
 
 	const restored = new DoeRegistry();
 	restored.restore(registry.serialize());
-	const contractor2 = restored.assignSeat({ agentId: "agent-4", role: "mid", model: "gpt-5.4" });
+	const contractor2 = restored.assignSeat({ agentId: "agent-5", role: "mid", model: "gpt-5.4" });
 	assert.equal(contractor2.name, "contractor-2");
 });
 

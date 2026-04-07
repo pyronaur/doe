@@ -74,7 +74,7 @@ function extractPlanFilePath(prompt: string): string {
 
 function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 	return createRegistryAgent({
-		name: "Spark",
+		name: "Hope",
 		effort: "medium",
 		template: "plan",
 		allowWrite: true,
@@ -86,8 +86,8 @@ function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 		runStartedAt: 1,
 		completionNotified: false,
 		recovered: false,
-		seatName: "Spark",
-		seatRole: "intern",
+		seatName: "Hope",
+		seatRole: "researcher",
 		finishNote: null,
 		reuseSummary: null,
 		...overrides,
@@ -292,7 +292,7 @@ async function createToolHarness(input: {
 }
 
 const PLAN_START_INPUT = {
-	ic: "Spark",
+	ic: "Hope",
 	planSlug: "auth refactor",
 	prompt: "Plan the auth rewrite.",
 };
@@ -390,7 +390,7 @@ function createStopPlanState(planFilePath: string) {
 	const registry = new DoeRegistry();
 	attachSeatAgent(registry, {
 		agentId: "agent-1",
-		ic: "Spark",
+		ic: "Hope",
 		threadId: "thread-1",
 		agent: createAgent({
 			id: "agent-1",
@@ -405,7 +405,7 @@ function createStopPlanState(planFilePath: string) {
 			sessionSlug: "feature-x",
 			planSlug: "auth-refactor",
 			planFilePath,
-			ic: "Spark",
+			ic: "Hope",
 			agentId: "agent-1",
 			threadId: "thread-1",
 			status: "ready_for_review",

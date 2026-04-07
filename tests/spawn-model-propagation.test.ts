@@ -140,7 +140,7 @@ test("codex_spawn inherits the assigned seat model and forwards it through threa
 	const result = await spawnTool.execute(
 		"tool-call-1",
 		{
-			ic: "Pattern",
+			ic: "Peter",
 			prompt: "Investigate why model defaults are not propagating.",
 			cwd: "/tmp",
 		},
@@ -149,7 +149,7 @@ test("codex_spawn inherits the assigned seat model and forwards it through threa
 		undefined,
 	);
 
-	assert.equal(registry.findSeat("Pattern")?.model, "gpt-5.4");
+	assert.equal(registry.findSeat("Peter")?.model, "gpt-5.4");
 	assert.equal(client.threadCalls[0]?.model, "gpt-5.4");
 	assert.equal(client.turnCalls[0]?.model, "gpt-5.4");
 	assert.equal(result.details.agents[0]?.model, "gpt-5.4");
@@ -211,7 +211,7 @@ test("codex_spawn returns the actual final output when completion arrives before
 	const result = await spawnTool.execute(
 		"tool-call-4",
 		{
-			ic: "Pattern",
+			ic: "Peter",
 			prompt: "Investigate queue/result mismatch.",
 			cwd: "/tmp",
 		},
