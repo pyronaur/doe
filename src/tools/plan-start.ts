@@ -18,10 +18,11 @@ import { resolveAgentFinalOutput } from "./agent-final-output.ts";
 import { formatContextStatusLines } from "./context-status.ts";
 import {
 	attachPlanReviewOutcomeHandler,
+	ensurePlanReviewPending,
 	formatPlanProgressSummary,
 	type PlanWorkflowToolDeps,
-	setPlanPendingReview,
 	setPlanReadyForReview,
+	setPlanReadyWithPendingReview,
 } from "./plan-workflow.ts";
 import { renderToolResultText } from "./tool-render.ts";
 import { recordStartedTurn } from "./turn-start.ts";
@@ -228,20 +229,25 @@ async function finishPlanStart(input: PlanStartFinishInput) {
 		activePlan.agentId === agentId
 		&& activePlan.planFilePath === context.planFile.planFilePath
 		&& activePlan.planSlug === context.planFile.planSlug;
-	setPlanReadyForReview(deps.setPlanState, matchActivePlan);
 
 	const startedAt = Date.now();
 	const reviewJob = deps.startReviewPlan({
 		planFilePath: context.planFile.planFilePath,
 		cwd: context.repoRoot,
 	});
+	try {
+		await ensurePlanReviewPending(reviewJob);
+	} catch (error) {
+		setPlanReadyForReview(deps.setPlanState, matchActivePlan);
+		throw error;
+	}
 	const matchPendingReview = (
 		pendingReview: NonNullable<ReturnType<typeof deps.getPlanState>["pendingReview"]>,
 	) =>
 		pendingReview.reviewId === reviewJob.reviewId
 		&& pendingReview.planFilePath === context.planFile.planFilePath
 		&& pendingReview.planSlug === context.planFile.planSlug;
-	setPlanPendingReview(
+	setPlanReadyWithPendingReview(
 		deps.setPlanState,
 		matchActivePlan,
 		{

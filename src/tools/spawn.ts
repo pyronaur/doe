@@ -83,7 +83,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 					"Use for new work only. Do not use when an existing thread has relevant context — use codex_resume instead.",
 					"Use name for the task label. Use ic for seat targeting.",
 					"Fresh spawn on the same seat starts a new thread and does not preserve thread memory. Use codex_resume when the same thread context should continue.",
-					"Pass ic to target a specific named seat, or pass role to auto-allocate the next free IC in researcher|senior|mid|junior|intern. DOE rejects tasks that omit both.",
+					"Pass ic to target a specific named seat, or pass role to auto-allocate the next free IC in researcher|senior|mid. DOE rejects tasks that omit both.",
 					"Compatibility shim: if name exactly matches an existing seat and ic is omitted, DOE treats that name as the intended seat.",
 					"Each new task gets a fresh assignment. If a role is full, DOE allocates contractor-N overflow seats.",
 					"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",

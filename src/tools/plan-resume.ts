@@ -16,10 +16,11 @@ import { resolveAgentFinalOutput } from "./agent-final-output.ts";
 import { formatContextStatusLines } from "./context-status.ts";
 import {
 	attachPlanReviewOutcomeHandler,
+	ensurePlanReviewPending,
 	formatPlanProgressSummary,
 	type PlanWorkflowToolDeps,
-	setPlanPendingReview,
 	setPlanReadyForReview,
+	setPlanReadyWithPendingReview,
 } from "./plan-workflow.ts";
 import { resumeThreadAndStartTurn, steerActiveTurn } from "./thread-turn.ts";
 import { renderToolResultText } from "./tool-render.ts";
@@ -217,7 +218,7 @@ async function runPlanResumeTurn(input: PlanResumeTurnInput) {
 	await resumeThreadAndStartTurn(resumeInput);
 }
 
-function startAsyncPlanReview(input: {
+async function startAsyncPlanReview(input: {
 	deps: PlanResumeToolDeps;
 	state: ActivePlanState;
 	sessionSlug: string;
@@ -235,11 +236,17 @@ function startAsyncPlanReview(input: {
 		planFilePath: state.planFilePath,
 		cwd: process.cwd(),
 	});
+	try {
+		await ensurePlanReviewPending(reviewJob);
+	} catch (error) {
+		setPlanReadyForReview(deps.setPlanState, matchActivePlan);
+		throw error;
+	}
 	const matchPendingReview = (pendingReview: PendingReviewState) =>
 		pendingReview.reviewId === reviewJob.reviewId
 		&& pendingReview.planSlug === state.planSlug
 		&& pendingReview.planFilePath === state.planFilePath;
-	setPlanPendingReview(
+	setPlanReadyWithPendingReview(
 		deps.setPlanState,
 		matchActivePlan,
 		{
@@ -263,7 +270,7 @@ function startAsyncPlanReview(input: {
 
 async function handlePlanResumeReviewRetry(input: PlanResumeRetryInput) {
 	const { deps, state, sessionSlug } = input;
-	const reviewId = startAsyncPlanReview({
+	const reviewId = await startAsyncPlanReview({
 		deps,
 		state,
 		sessionSlug,
@@ -293,7 +300,7 @@ async function handlePlanResumePendingReview(input: PlanResumePendingInput) {
 		});
 	}
 
-	const reviewId = startAsyncPlanReview({
+	const reviewId = await startAsyncPlanReview({
 		deps,
 		state,
 		sessionSlug,
@@ -352,7 +359,7 @@ async function handlePlanResumeRevision(input: PlanResumeRevisionInput) {
 		&& activePlan.planSlug === state.planSlug
 		&& activePlan.planFilePath === state.planFilePath;
 	setPlanReadyForReview(deps.setPlanState, matchActivePlan);
-	const reviewId = startAsyncPlanReview({
+	const reviewId = await startAsyncPlanReview({
 		deps,
 		state,
 		sessionSlug,

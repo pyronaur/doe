@@ -36,6 +36,18 @@ test("seat assignment requires an explicit IC or an explicit role", () => {
 	);
 });
 
+test("seat assignment rejects removed roles", () => {
+	const registry = new DoeRegistry();
+	assert.throws(
+		() => registry.assignSeat({ agentId: "agent-1", role: "junior" }),
+		/Unknown IC role "junior"/,
+	);
+	assert.throws(
+		() => registry.assignSeat({ agentId: "agent-2", role: "intern" }),
+		/Unknown IC role "intern"/,
+	);
+});
+
 test("contractor assignments require an explicit model", () => {
 	const registry = new DoeRegistry();
 	registry.assignSeat({ agentId: "agent-1", role: "mid" });

@@ -11,7 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DoePlanReviewResult } from "../src/plan/review.ts";
 import { startPlanReviewCli } from "../src/plan/review.ts";
-import { createEmptyPlanState, type DoePlanState } from "../src/plan/session-state.ts";
+import {
+	clonePlanState,
+	createEmptyPlanState,
+	type DoePlanState,
+} from "../src/plan/session-state.ts";
 import { DoeRegistry } from "../src/roster/registry.ts";
 import type { AgentRecord } from "../src/roster/types.ts";
 import { attachSeatAgent, createRegistryAgent } from "./registry-fixtures.ts";
@@ -164,7 +168,12 @@ interface ReviewController {
 	calls: Array<{ reviewId: string; planFilePath: string; cwd: string }>;
 	startReviewPlan: (
 		input: { reviewId?: string; planFilePath: string; cwd: string },
-	) => { reviewId: string; wait: Promise<DoePlanReviewResult> };
+	) => {
+		reviewId: string;
+		wait: Promise<DoePlanReviewResult>;
+		started?: Promise<void>;
+		isAlive?: () => boolean;
+	};
 	resolve: (reviewId: string, value: DoePlanReviewResult) => void;
 	reject: (reviewId: string, error: Error) => void;
 }
@@ -179,7 +188,12 @@ function createReviewController(): ReviewController {
 		calls.push({ reviewId, planFilePath: input.planFilePath, cwd: input.cwd });
 		const existing = jobs.get(reviewId);
 		if (existing) {
-			return { reviewId, wait: existing.wait };
+			return {
+				reviewId,
+				wait: existing.wait,
+				started: Promise.resolve(),
+				isAlive: () => jobs.has(reviewId),
+			};
 		}
 		let resolve!: (value: DoePlanReviewResult) => void;
 		let reject!: (error: Error) => void;
@@ -188,7 +202,12 @@ function createReviewController(): ReviewController {
 			reject = rej;
 		});
 		jobs.set(reviewId, { reviewId, wait, resolve, reject });
-		return { reviewId, wait };
+		return {
+			reviewId,
+			wait,
+			started: Promise.resolve(),
+			isAlive: () => jobs.has(reviewId),
+		};
 	};
 
 	const resolve = (reviewId: string, value: DoePlanReviewResult) => {
@@ -212,6 +231,32 @@ function createReviewController(): ReviewController {
 	return { calls, startReviewPlan, resolve, reject };
 }
 
+function createImmediateFailReviewController(message: string): ReviewController {
+	const calls: Array<{ reviewId: string; planFilePath: string; cwd: string }> = [];
+	let nextReview = 0;
+	return {
+		calls,
+		startReviewPlan(input: { reviewId?: string; planFilePath: string; cwd: string }) {
+			const reviewId = input.reviewId ?? `review-${++nextReview}`;
+			calls.push({ reviewId, planFilePath: input.planFilePath, cwd: input.cwd });
+			const failed = Promise.reject(new Error(message));
+			void failed.catch(() => {});
+			return {
+				reviewId,
+				started: failed,
+				wait: failed,
+				isAlive: () => false,
+			};
+		},
+		resolve(reviewId: string) {
+			throw new Error(`Unexpected resolve for ${reviewId}`);
+		},
+		reject(reviewId: string) {
+			throw new Error(`Unexpected reject for ${reviewId}`);
+		},
+	};
+}
+
 interface RegisteredTool {
 	name: string;
 	execute: (...args: unknown[]) => Promise<any>;
@@ -232,17 +277,21 @@ interface PlanStateHandle {
 		_options?: { flush?: boolean },
 	) => DoePlanState;
 	read: () => DoePlanState;
+	history: () => DoePlanState[];
 }
 
 function createPlanStateHandle(initial: DoePlanState = createEmptyPlanState()): PlanStateHandle {
 	let planState = initial;
+	const updates: DoePlanState[] = [clonePlanState(initial)];
 	return {
 		getPlanState: () => planState,
 		setPlanState: (updater) => {
 			planState = updater(planState);
+			updates.push(clonePlanState(planState));
 			return planState;
 		},
 		read: () => planState,
+		history: () => updates.map((entry) => clonePlanState(entry)),
 	};
 }
 
@@ -334,10 +383,11 @@ async function createPlanHarness(input: {
 	templatesDir: string;
 	planBodies: string[];
 	planState?: DoePlanState;
+	reviewController?: ReviewController;
 }) {
 	const registry = new DoeRegistry();
 	const client = new FakePlanClient(registry, input.planBodies);
-	const reviewController = createReviewController();
+	const reviewController = input.reviewController ?? createReviewController();
 	const planState = createPlanStateHandle(input.planState);
 	const tools = await createToolHarness({
 		registry,
@@ -541,6 +591,7 @@ test("plan_stop clears pendingReview and cancels an in-memory plannotator job", 
 			planFilePath,
 			cwd: repoRoot,
 		});
+		await reviewJob.started;
 		const { registry, client, planState } = createStopPlanState(planFilePath);
 		const tools = await createToolHarness({
 			registry,
@@ -557,5 +608,102 @@ test("plan_stop clears pendingReview and cancels an in-memory plannotator job", 
 		assert.equal(planState.read().pendingReview, null);
 		assert.equal(stopResult.details.cancelledReview, true);
 		restorePath();
+	});
+});
+
+test("plan_start throws when review fails immediately after launch", {
+	concurrency: false,
+}, async () => {
+	await withPlanRepo(async ({ templatesDir }) => {
+		const harness = await createPlanHarness({
+			templatesDir,
+			planBodies: ["# Draft\n\nInitial plan.\n"],
+			reviewController: createImmediateFailReviewController(
+				"Failed to start Plannotator CLI: spawn plannotator ENOENT",
+			),
+		});
+
+		await assert.rejects(
+			runPlanStart(harness.start),
+			/Failed to start Plannotator CLI: spawn plannotator ENOENT/,
+		);
+		assert.equal(harness.planState.read().pendingReview, null);
+	});
+});
+
+test("plan_resume retry throws when review fails immediately after launch", {
+	concurrency: false,
+}, async () => {
+	await withPlanRepo(async ({ templatesDir }) => {
+		const harness = await createPlanHarness({
+			templatesDir,
+			planBodies: ["# Draft\n\nInitial plan.\n"],
+			planState: {
+				version: 5,
+				sessionSlugReminderSentAtTurn: null,
+				activePlan: {
+					sessionSlug: "feature-x",
+					planSlug: "auth-refactor",
+					planFilePath: join(
+						process.cwd(),
+						".tmp",
+						"feature-x",
+						"plan-auth-refactor.md",
+					),
+					ic: "Hope",
+					agentId: "agent-1",
+					threadId: "thread-1",
+					status: "ready_for_review",
+					reviewFeedback: null,
+				},
+				pendingReview: null,
+			},
+			reviewController: createImmediateFailReviewController(
+				"Failed to start Plannotator CLI: spawn plannotator ENOENT",
+			),
+		});
+		attachSeatAgent(harness.registry, {
+			agentId: "agent-1",
+			ic: "Hope",
+			threadId: "thread-1",
+			agent: createAgent({
+				id: "agent-1",
+				threadId: "thread-1",
+				state: "completed",
+				completedAt: Date.now(),
+				activeTurnId: null,
+			}),
+		});
+
+		await assert.rejects(
+			runPlanResume(harness.resume),
+			/Failed to start Plannotator CLI: spawn plannotator ENOENT/,
+		);
+		assert.equal(harness.planState.read().pendingReview, null);
+		assert.equal(harness.planState.read().activePlan?.status, "ready_for_review");
+	});
+});
+
+test("plan_start persists ready_for_review and pendingReview atomically", {
+	concurrency: false,
+}, async () => {
+	await withPlanRepo(async ({ templatesDir }) => {
+		const harness = await createPlanHarness({
+			templatesDir,
+			planBodies: ["# Draft\n\nInitial plan.\n"],
+		});
+
+		await runPlanStart(harness.start);
+		const history = harness.planState.history();
+		const hasSplitTransition = history.some((state, index) => {
+			if (index === 0) {
+				return false;
+			}
+			const previous = history[index - 1];
+			return previous?.activePlan?.status === "drafting"
+				&& state.activePlan?.status === "ready_for_review"
+				&& state.pendingReview === null;
+		});
+		assert.equal(hasSplitTransition, false);
 	});
 });

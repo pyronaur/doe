@@ -9,7 +9,7 @@ export type AgentLifecycleState =
 	| "finalized";
 export type NotificationMode = "wait_all" | "notify_each";
 export type ReturnMode = "wait";
-export type ICRole = "researcher" | "senior" | "mid" | "junior" | "intern";
+export type ICRole = "researcher" | "senior" | "mid";
 export type SeatRole = ICRole | "contractor";
 
 export interface ICDefaults {

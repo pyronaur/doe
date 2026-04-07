@@ -8,11 +8,9 @@ export const IC_ROLES = [
 export const SEAT_ROLES = [...IC_ROLES, "contractor"] as const satisfies readonly SeatRole[];
 
 export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {
-	researcher: "Researchers/Assistants",
+	researcher: "Researchers",
 	senior: "Seniors",
 	mid: "Mid-level Engineers",
-	junior: "Junior Engineers",
-	intern: "Interns",
 	contractor: "Contractors",
 };
 

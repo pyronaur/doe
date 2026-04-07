@@ -15,7 +15,12 @@ export interface PlanWorkflowToolDeps {
 	templatesDir: string;
 	startReviewPlan: (
 		input: { reviewId?: string; planFilePath: string; cwd: string },
-	) => { reviewId: string; wait: Promise<DoePlanReviewResult> };
+	) => {
+		reviewId: string;
+		wait: Promise<DoePlanReviewResult>;
+		started?: Promise<void>;
+		isAlive?: () => boolean;
+	};
 	getSessionSlug: () => string | null;
 	getPlanState: () => DoePlanState;
 	setPlanState: (
@@ -115,6 +120,22 @@ export function setPlanReadyForReview(
 	}));
 }
 
+export async function ensurePlanReviewPending(job: {
+	reviewId: string;
+	wait: Promise<DoePlanReviewResult>;
+	started?: Promise<void>;
+	isAlive?: () => boolean;
+}) {
+	if (job.started) {
+		await job.started;
+	}
+	if (!job.isAlive || job.isAlive()) {
+		return;
+	}
+	await job.wait;
+	throw new Error(`Plannotator review ${job.reviewId} exited before entering pending state.`);
+}
+
 export function setPlanReviewOutcome(
 	setPlanState: PlanWorkflowToolDeps["setPlanState"],
 	match: MatchActivePlan,
@@ -130,18 +151,26 @@ export function setPlanReviewOutcome(
 			});
 }
 
-export function setPlanPendingReview(
+export function setPlanReadyWithPendingReview(
 	setPlanState: PlanWorkflowToolDeps["setPlanState"],
 	match: MatchActivePlan,
 	pending: PendingReviewState,
 ) {
 	setPlanState(
-		(current) => ({
-			...current,
-			pendingReview: current.activePlan && match(current.activePlan)
-				? { ...pending }
-				: current.pendingReview,
-		}),
+		(current) => {
+			if (!current.activePlan || !match(current.activePlan)) {
+				return current;
+			}
+			return {
+				...current,
+				activePlan: {
+					...current.activePlan,
+					status: "ready_for_review",
+					reviewFeedback: null,
+				},
+				pendingReview: { ...pending },
+			};
+		},
 		{ flush: true },
 	);
 }

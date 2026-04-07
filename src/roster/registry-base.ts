@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { IC_CONFIG, SEAT_ROLE_LABELS, SEAT_ROLES } from "./config.ts";
+import { IC_CONFIG, IC_ROLES, SEAT_ROLE_LABELS, SEAT_ROLES } from "./config.ts";
 import {
 	ATTACHED_STATES,
 	cloneAgent,
@@ -37,7 +37,6 @@ export class DoeRegistryBase extends EventEmitter {
 		super();
 		this.resetRoster();
 	}
-
 	createBatch(input: {
 		id: string;
 		name: string;
@@ -61,16 +60,22 @@ export class DoeRegistryBase extends EventEmitter {
 	}
 
 	assignSeat(
-		input: { agentId: string; ic?: string | null; role?: ICRole | null; model?: string | null },
+		input: {
+			agentId: string;
+			ic?: string | null;
+			role?: string | null;
+			model?: string | null;
+		},
 	): RosterSeatRecord {
 		const requestedIc = input.ic?.trim() || null;
-		const requestedRole = input.role ?? null;
+		const requestedRole = typeof input.role === "string" ? input.role.trim() : null;
+		const validatedRole = this.resolveRequestedRole(requestedRole);
 		if (!requestedIc && !requestedRole) {
 			throw new Error("Seat assignment requires either an explicit IC or an explicit role.");
 		}
 		let seat = requestedIc
 			? this.requireSeatForAssignment(requestedIc)
-			: this.allocateSeat(requestedRole, input.model ?? null);
+			: this.allocateSeat(validatedRole, input.model ?? null);
 		if (seat.role === "contractor") {
 			if (!requestedRole) {
 				throw new Error("Contractor assignments require an explicit role.");
@@ -91,7 +96,15 @@ export class DoeRegistryBase extends EventEmitter {
 		this.emitChange();
 		return cloneSeat(next);
 	}
-
+	private resolveRequestedRole(role: string | null): ICRole | null {
+		if (!role) {
+			return null;
+		}
+		if (role === "researcher" || role === "senior" || role === "mid") {
+			return role;
+		}
+		throw new Error(`Unknown IC role "${role}". Use one of: ${IC_ROLES.join(", ")}.`);
+	}
 	upsertAgent(agent: AgentRecord): AgentRecord {
 		const previous = this.agents.get(agent.id);
 		const next = cloneAgent(agent);
@@ -459,7 +472,6 @@ export class DoeRegistryBase extends EventEmitter {
 		this.emit("event",
 			{ type: "agent-terminal", agent: cloneAgent(agent) } satisfies RegistryEvent);
 	}
-
 	protected checkBatchCompletion(batchId?: string) {
 		if (!batchId) { return; }
 		const batch = this.batches.get(batchId);

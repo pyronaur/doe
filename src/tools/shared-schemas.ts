@@ -4,7 +4,7 @@ import { Type } from "@sinclair/typebox";
 const SharedSpawnSeatFields = {
 	name: Type.Optional(Type.String()),
 	ic: Type.Optional(Type.String()),
-	role: Type.Optional(StringEnum(["researcher", "senior", "mid", "junior", "intern"] as const)),
+	role: Type.Optional(StringEnum(["researcher", "senior", "mid"] as const)),
 	cwd: Type.Optional(Type.String()),
 };
 
@@ -21,7 +21,7 @@ export const ApprovalSchema = StringEnum(
 export const SandboxSchema = StringEnum(
 	["read-only", "workspace-write", "danger-full-access"] as const,
 );
-export const RoleSchema = StringEnum(["researcher", "senior", "mid", "junior", "intern"] as const);
+export const RoleSchema = StringEnum(["researcher", "senior", "mid"] as const);
 export const SharedExecutionOptionFields = {
 	model: Type.Optional(Type.String()),
 	effort: Type.Optional(EffortSchema),

@@ -28,8 +28,7 @@ function isSandboxMode(value: unknown): value is SandboxMode {
 	return value === "read-only" || value === "workspace-write" || value === "danger-full-access";
 }
 function isICRole(value: unknown): value is ICRole {
-	return value === "researcher" || value === "senior" || value === "mid"
-		|| value === "junior" || value === "intern";
+	return value === "researcher" || value === "senior" || value === "mid";
 }
 function stripTaskControlKeys(task: unknown) {
 	if (!isRecord(task)) {

@@ -21,12 +21,9 @@ const cases = [
 	{ role: "mid", sandbox: undefined, mode: "workspace-write" },
 	{ role: "mid", sandbox: "workspace-write", mode: "workspace-write" },
 	{ role: "mid", sandbox: "danger-full-access", mode: "danger-full-access" },
-	{ role: "junior", sandbox: undefined, mode: "read-only" },
-	{ role: "junior", sandbox: "workspace-write", mode: "read-only" },
-	{ role: "junior", sandbox: "danger-full-access", mode: "read-only" },
-	{ role: "intern", sandbox: undefined, mode: "read-only" },
-	{ role: "intern", sandbox: "workspace-write", mode: "read-only" },
-	{ role: "intern", sandbox: "danger-full-access", mode: "read-only" },
+	{ role: null, sandbox: undefined, mode: "read-only" },
+	{ role: null, sandbox: "workspace-write", mode: "read-only" },
+	{ role: null, sandbox: "danger-full-access", mode: "read-only" },
 ] as const;
 
 test("spawn sandbox policy matches the DOE role matrix", () => {

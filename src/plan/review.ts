@@ -12,7 +12,9 @@ export interface DoePlanReviewJob {
 	planFilePath: string;
 	cwd: string;
 	requestedAt: number;
+	started: Promise<void>;
 	wait: Promise<DoePlanReviewResult>;
+	isAlive: () => boolean;
 	cancel: () => void;
 }
 
@@ -32,8 +34,14 @@ interface StartPlanReviewInput {
 }
 
 interface ReviewProcess {
+	started: Promise<void>;
 	wait: Promise<DoePlanReviewResult>;
 	cancel: () => void;
+}
+
+interface StartupLatch {
+	started: Promise<void>;
+	settle: (input: { ok: true } | { ok: false; error: Error }) => void;
 }
 
 const planReviewJobs = new Map<string, DoePlanReviewJob>();
@@ -45,12 +53,96 @@ function isPlannotatorOutput(value: unknown): value is PlannotatorReviewOutput {
 	return true;
 }
 
+function createStartupLatch(): StartupLatch {
+	let resolveStarted: (() => void) | null = null;
+	let rejectStarted: ((error: Error) => void) | null = null;
+	const started = new Promise<void>((resolve, reject) => {
+		resolveStarted = resolve;
+		rejectStarted = reject;
+	});
+	const settle = (input: { ok: true } | { ok: false; error: Error }) => {
+		if (!resolveStarted || !rejectStarted) {
+			return;
+		}
+		const onResolve = resolveStarted;
+		const onReject = rejectStarted;
+		resolveStarted = null;
+		rejectStarted = null;
+		if (input.ok) {
+			onResolve();
+			return;
+		}
+		onReject(input.error);
+	};
+	return { started, settle };
+}
+
+function tryWriteReviewPayload(input: {
+	payload: string;
+	fail: (message: string) => void;
+	stdin: { write(chunk: string): void; end(): void };
+}): boolean {
+	try {
+		input.stdin.write(input.payload);
+		input.stdin.end();
+		return true;
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		input.fail(`Failed to send plan content to Plannotator CLI: ${reason}`);
+		return false;
+	}
+}
+
+function buildReviewFailureReason(input: {
+	stderr: string;
+	stdout: string;
+	code: number | null;
+	signal: NodeJS.Signals | null;
+}): string {
+	return input.stderr.trim() || input.stdout.trim()
+		|| `exit code ${input.code ?? "null"}, signal ${input.signal ?? "null"}`;
+}
+
+function handleReviewClose(input: {
+	code: number | null;
+	signal: NodeJS.Signals | null;
+	stderr: string;
+	stdout: string;
+	resolve: (result: DoePlanReviewResult) => void;
+	reject: (error: Error) => void;
+	settleStarted: StartupLatch["settle"];
+}) {
+	if (input.code !== 0) {
+		const reason = buildReviewFailureReason({
+			stderr: input.stderr,
+			stdout: input.stdout,
+			code: input.code,
+			signal: input.signal,
+		});
+		input.settleStarted({
+			ok: false,
+			error: new Error(`Plannotator CLI review failed: ${reason}`),
+		});
+		input.reject(new Error(`Plannotator CLI review failed: ${reason}`));
+		return;
+	}
+
+	input.settleStarted({ ok: true });
+	try {
+		input.resolve(parsePlannotatorReviewResult(input.stdout));
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		input.reject(new Error(`Plannotator review returned an invalid decision: ${reason}`));
+	}
+}
+
 function spawnReviewProcess(input: {
 	reviewId: string;
 	payload: string;
 	cwd: string;
 }): ReviewProcess {
 	let cancel = () => {};
+	const startup = createStartupLatch();
 	const wait = new Promise<DoePlanReviewResult>((resolve, reject) => {
 		const child = spawn("plannotator", [], {
 			cwd: input.cwd,
@@ -63,7 +155,6 @@ function spawnReviewProcess(input: {
 		let stdout = "";
 		let stderr = "";
 		let settled = false;
-
 		const finish = (handler: () => void) => {
 			if (settled) {
 				return;
@@ -72,19 +163,24 @@ function spawnReviewProcess(input: {
 			planReviewJobs.delete(input.reviewId);
 			handler();
 		};
-		const fail = (message: string) => finish(() => reject(new Error(message)));
+		const fail = (message: string) => {
+			const error = new Error(message);
+			startup.settle({ ok: false, error });
+			finish(() => reject(error));
+		};
 
 		cancel = () => {
 			child.kill("SIGTERM");
 			fail("Plannotator review was cancelled before a decision was captured.");
 		};
 
-		try {
-			child.stdin.write(input.payload);
-			child.stdin.end();
-		} catch (error) {
-			const reason = error instanceof Error ? error.message : String(error);
-			fail(`Failed to send plan content to Plannotator CLI: ${reason}`);
+		if (
+			!tryWriteReviewPayload({
+				payload: input.payload,
+				fail,
+				stdin: child.stdin,
+			})
+		) {
 			return;
 		}
 
@@ -94,28 +190,28 @@ function spawnReviewProcess(input: {
 		child.stderr.on("data", (chunk) => {
 			stderr += String(chunk);
 		});
+		child.on("spawn", () => {
+			startup.settle({ ok: true });
+		});
 		child.on("error", (error) => {
 			fail(`Failed to start Plannotator CLI: ${error.message}`);
 		});
 		child.on("close", (code, signal) => {
 			finish(() => {
-				if (code === 0) {
-					try {
-						resolve(parsePlannotatorReviewResult(stdout));
-						return;
-					} catch (error) {
-						const reason = error instanceof Error ? error.message : String(error);
-						reject(new Error(`Plannotator review returned an invalid decision: ${reason}`));
-						return;
-					}
-				}
-				const reason = stderr.trim() || stdout.trim()
-					|| `exit code ${code ?? "null"}, signal ${signal ?? "null"}`;
-				reject(new Error(`Plannotator CLI review failed: ${reason}`));
+				handleReviewClose({
+					code,
+					signal,
+					stderr,
+					stdout,
+					resolve,
+					reject,
+					settleStarted: startup.settle,
+				});
 			});
 		});
 	});
 	return {
+		started: startup.started,
 		wait,
 		cancel: () => cancel(),
 	};
@@ -179,7 +275,9 @@ export function startPlanReviewCli(input: StartPlanReviewInput): DoePlanReviewJo
 		planFilePath: input.planFilePath,
 		cwd: input.cwd,
 		requestedAt: Date.now(),
+		started: process.started,
 		wait: process.wait,
+		isAlive: () => planReviewJobs.get(reviewId) === job,
 		cancel: () => process.cancel(),
 	};
 	planReviewJobs.set(reviewId, job);
