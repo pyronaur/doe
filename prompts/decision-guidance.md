@@ -35,6 +35,7 @@ Match the IC's skill level to the task. Getting it wrong costs time and money.
 
 ## IC Write Access
 - Research ICs start read-only
+- If you're unsure a non-image read will be approved, delegate that read to an IC instead of attempting the gated read directly.
 - After output is validated: upgrade skill level if needed, grant write to a specific path, direct the IC to store output there
 - Aggregate all research files before handing off to a planning or implementation IC
 
