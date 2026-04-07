@@ -21,6 +21,7 @@ import { cancelAgentRun } from "./cancel-agent-run.js";
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
+const SandboxSchema = StringEnum(["read-only", "workspace-write", "danger-full-access"] as const);
 
 interface ResumeToolDeps {
 	client: CodexAppServerClient;
@@ -36,9 +37,9 @@ function resolveAgentFinalOutput(agent: any): string | null {
 	return agent?.latestFinalOutput ?? lastAgentMessage ?? null;
 }
 
-export function resolveSandboxMode(role: string | null | undefined, allowWrite: boolean): SandboxMode {
+export function resolveSandboxMode(role: string | null | undefined, sandbox?: SandboxMode | null): SandboxMode {
 	if (role === "senior") return "danger-full-access";
-	if (role === "mid") return allowWrite ? "danger-full-access" : "read-only";
+	if (role === "mid") return sandbox === "danger-full-access" ? "danger-full-access" : "workspace-write";
 	return "read-only";
 }
 
@@ -105,7 +106,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			"Do not resume a finished unrelated task just because the seat name matches. Spawn fresh work on that seat instead.",
 			"Does not accept tasks[], name, cwd, or batchName.",
 			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
-			"Keep read-only unless this is explicit implementation work — set allowWrite=true only then.",
+			"Sandbox follows DOE role policy. `allowWrite` only controls auto-approval of file-change requests; use `sandbox=\"danger-full-access\"` to opt a mid-level IC into full access.",
 			"Waits for the worker to finish before returning and returns the worker's full final answer in content. Use that returned content directly as the worker result.",
 		],
 		parameters: Type.Object({
@@ -121,6 +122,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			approvalPolicy: Type.Optional(ApprovalSchema),
 			networkAccess: Type.Optional(Type.Boolean()),
 			allowWrite: Type.Optional(Type.Boolean()),
+			sandbox: Type.Optional(SandboxSchema),
 		}),
 		renderCall(args, theme) {
 			return new Text(theme.fg("accent", `codex_resume ${(args as any).ic ?? (args as any).agentId ?? (args as any).threadId ?? "thread"}`), 0, 0);
@@ -154,7 +156,7 @@ export function registerResumeTool(pi: ExtensionAPI, deps: ResumeToolDeps) {
 			const inheritedModel = explicitModel || templateDefaultModel ? null : validateModelId(agent.model, `stored model for agent ${agent.id}`);
 			const model = validateModelId(explicitModel ?? templateDefaultModel ?? inheritedModel ?? agent.model, explicitModel ? "model" : "resolved model");
 			const allowWrite = params.allowWrite ?? ((templateName ?? params.template ?? agent.template ?? null) === "implement" ? true : (agent.allowWrite ?? false));
-			const sandbox = resolveSandboxMode(agent.seatRole ?? null, allowWrite);
+			const sandbox = resolveSandboxMode(agent.seatRole ?? null, params.sandbox);
 			const runStartedAt = Date.now();
 
 			deps.registry.upsertAgent({

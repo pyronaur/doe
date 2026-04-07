@@ -2,7 +2,7 @@ import type { CurrentContextUsage, ThreadTokenUsage } from "../context-usage.js"
 
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type ApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
-export type SandboxMode = "danger-full-access" | "read-only";
+export type SandboxMode = "danger-full-access" | "read-only" | "workspace-write";
 
 export interface ThreadSummary {
 	id: string;

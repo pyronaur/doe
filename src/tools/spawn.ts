@@ -18,6 +18,7 @@ import { formatSpawnAgentResult, formatSpawnBatchResults, resolveSpawnRenderBody
 
 const EffortSchema = StringEnum(["low", "medium", "high", "xhigh"] as const);
 const ApprovalSchema = StringEnum(["never", "on-request", "on-failure", "untrusted"] as const);
+const SandboxSchema = StringEnum(["read-only", "workspace-write", "danger-full-access"] as const);
 const RoleSchema = StringEnum(IC_ROLES);
 
 const TaskSchema = Type.Object({
@@ -33,6 +34,7 @@ const TaskSchema = Type.Object({
 	approvalPolicy: Type.Optional(ApprovalSchema),
 	networkAccess: Type.Optional(Type.Boolean()),
 	allowWrite: Type.Optional(Type.Boolean()),
+	sandbox: Type.Optional(SandboxSchema),
 });
 
 const SpawnParametersSchema = Type.Object({
@@ -49,6 +51,7 @@ const SpawnParametersSchema = Type.Object({
 	approvalPolicy: Type.Optional(ApprovalSchema),
 	networkAccess: Type.Optional(Type.Boolean()),
 	allowWrite: Type.Optional(Type.Boolean()),
+	sandbox: Type.Optional(SandboxSchema),
 	batchName: Type.Optional(Type.String()),
 });
 
@@ -128,6 +131,7 @@ function buildTasks(params: any): any[] {
 			approvalPolicy: params.approvalPolicy,
 			networkAccess: params.networkAccess,
 			allowWrite: params.allowWrite,
+			sandbox: params.sandbox,
 		},
 	];
 }
@@ -150,9 +154,9 @@ function inferAllowWrite(task: { template?: string | null; allowWrite?: boolean 
 	return (templateName ?? task.template ?? null) === "implement";
 }
 
-export function resolveSandboxMode(role: ICRole | null | undefined, allowWrite: boolean): SandboxMode {
+export function resolveSandboxMode(role: ICRole | null | undefined, sandbox?: SandboxMode | null): SandboxMode {
 	if (role === "senior") return "danger-full-access";
-	if (role === "mid") return allowWrite ? "danger-full-access" : "read-only";
+	if (role === "mid") return sandbox === "danger-full-access" ? "danger-full-access" : "workspace-write";
 	return "read-only";
 }
 
@@ -217,7 +221,7 @@ async function executeSpawnLike(
 			const model = validateModelId(explicitModel ?? templateDefaultModel ?? "gpt-5.4-mini", explicitModel ? "model" : "resolved model");
 			const effort = (rawTask.effort ?? templateDefaultEffort ?? "medium") as ReasoningEffort;
 			const allowWrite = inferAllowWrite(rawTask, templateName);
-			const sandbox = resolveSandboxMode((rawTask.role ?? "mid") as ICRole, allowWrite);
+			const sandbox = resolveSandboxMode((rawTask.role ?? "mid") as ICRole, rawTask.sandbox ?? params.sandbox);
 			const agentId = seededAgentIds[index - 1]!;
 			promptsByAgentId[agentId] = prompt;
 			const seat = deps.registry.assignSeat({
@@ -339,7 +343,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 			"Compatibility shim: if name exactly matches an existing seat and ic is omitted, DOE treats that name as the intended seat.",
 			"Each new task gets a fresh assignment. If a role is full, DOE allocates contractor-N overflow seats.",
 			"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
-			"Workers are read-only by default. Set allowWrite=true per task, or use template=implement which enables write automatically.",
+			"Sandbox follows DOE role policy. `allowWrite` only controls auto-approval of file-change requests; use `sandbox=\"danger-full-access\"` for mid-level workers when you need full access.",
 			"Waits for workers to complete and returns each worker's full final answer in content. Use that returned content directly as the worker result.",
 		],
 		parameters: SpawnParametersSchema,

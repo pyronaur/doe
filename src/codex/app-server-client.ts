@@ -96,6 +96,15 @@ function normalizeCurrentContextUsage(value: any): CurrentContextUsage | null {
 
 function buildSandboxPolicy(sandbox: SandboxMode, networkAccess = false) {
 	if (sandbox === "read-only") return buildReadOnlySandbox(networkAccess);
+	if (sandbox === "workspace-write") {
+		return {
+			type: "workspaceWrite",
+			writableRoots: [],
+			networkAccess,
+			excludeTmpdirEnvVar: false,
+			excludeSlashTmp: false,
+		} as const;
+	}
 	return buildDangerFullAccessSandbox();
 }
 
