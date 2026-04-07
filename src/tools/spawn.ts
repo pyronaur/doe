@@ -88,7 +88,7 @@ export function registerSpawnTool(pi: ExtensionAPI, deps: SpawnToolDeps) {
 					"Each new task gets a fresh assignment. If a role is full, DOE allocates contractor-N overflow seats.",
 					"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
 					"Sandbox follows DOE role policy. `allowWrite` only controls auto-approval of file-change requests; use `sandbox=\"danger-full-access\"` for mid-level workers when you need full access.",
-					"Waits for workers to complete and returns each worker's full final answer in content. Use that returned content directly as the worker result.",
+					"Returns immediately after launching worker threads. Use codex_resume to steer running work and codex_list or codex_inspect to monitor progress.",
 				],
 				renderCallLabel(args) {
 					const taskCount = Array.isArray(args.tasks) ? args.tasks.length : 1;

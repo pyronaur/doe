@@ -16,7 +16,6 @@ interface SpawnTestClient {
 	turnCalls: Array<Record<string, unknown>>;
 	startThread(options: Record<string, unknown>): Promise<{ thread: { id: string } }>;
 	startTurn(options: Record<string, unknown>): Promise<{ turn: { id: string } }>;
-	readThread?(threadId: string): Promise<{ thread: Record<string, unknown> }>;
 }
 
 class FakeSpawnClient {
@@ -76,27 +75,6 @@ function createLateRegistryClient(registry: DoeRegistry): SpawnTestClient {
 
 			return { turn: { id: turnId } };
 		},
-		async readThread(threadId: string) {
-			const turnIndex = Number.parseInt(threadId.replace("thread-", ""), 10);
-			const turnId = Number.isFinite(turnIndex) && turnIndex > 0 ? `turn-${turnIndex}` : null;
-			const text = turnId ? `Final ${turnId}` : null;
-			return {
-				thread: {
-					id: threadId,
-					turns: turnId && text
-						? [{
-							id: turnId,
-							status: "completed",
-							items: [{
-								id: `item-${turnId}`,
-								type: "agentMessage",
-								text,
-							}],
-						}]
-						: [],
-				},
-			};
-		},
 	};
 	return client;
 }
@@ -153,6 +131,8 @@ test("codex_spawn inherits the assigned seat model and forwards it through threa
 	assert.equal(client.threadCalls[0]?.model, "gpt-5.4");
 	assert.equal(client.turnCalls[0]?.model, "gpt-5.4");
 	assert.equal(result.details.agents[0]?.model, "gpt-5.4");
+	assert.equal(result.details.agents[0]?.state, "working");
+	assert.match(String(result.content?.[0]?.text ?? ""), /next_step:/);
 });
 
 test("codex_spawn requires an explicit role for auto-allocation", async () => {
@@ -203,7 +183,7 @@ test("codex_spawn requires an explicit or template-supplied model when overflow 
 	assert.equal(client.threadCalls.length, 0);
 });
 
-test("codex_spawn returns the actual final output when completion arrives before registry message hydration", async () => {
+test("codex_spawn returns immediately after launch without waiting for terminal output", async () => {
 	const registry = new DoeRegistry();
 	const client = createLateRegistryClient(registry);
 	const spawnTool = await createSpawnTool(registry, client);
@@ -221,6 +201,6 @@ test("codex_spawn returns the actual final output when completion arrives before
 	);
 
 	const text = String(result.content?.[0]?.text ?? "");
-	assert.match(text, /result:\nFinal turn-1/);
-	assert.doesNotMatch(text, /result:\nqueued:/);
+	assert.match(text, /state: working/);
+	assert.match(text, /next_step:/);
 });

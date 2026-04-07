@@ -1,6 +1,5 @@
 import { formatAgentCapacity } from "../agent-capacity.ts";
 import { truncateForDisplay } from "../codex/client.ts";
-import { resolveAgentFinalOutput } from "./agent-final-output.ts";
 import { formatContextStatusLines } from "./context-status.ts";
 
 interface SpawnResultMessage {
@@ -45,6 +44,8 @@ export function formatSpawnAgentResult(agent: any, input: { prompt?: string | nu
 	const prompt = input.prompt ? stripSharedSessionContext(input.prompt) : "(prompt unavailable)";
 	return [
 		`ic: ${agent.name}`,
+		`agent_id: ${agent.id ?? "unknown"}`,
+		`thread_id: ${agent.threadId ?? "pending"}`,
 		`state: ${agent.state}`,
 		`capacity: ${formatAgentCapacity(agent)}`,
 		`model: ${agent.model}`,
@@ -54,8 +55,8 @@ export function formatSpawnAgentResult(agent: any, input: { prompt?: string | nu
 		"prompt:",
 		prompt,
 		"",
-		"result:",
-		resolveAgentFinalOutput(agent),
+		"next_step:",
+		"Worker launched and running in the background. Use codex_resume to steer, and use codex_list or codex_inspect to monitor progress.",
 	].join("\n");
 }
 
@@ -63,7 +64,12 @@ export function formatSpawnBatchResults(
 	agents: any[],
 	promptsByAgentId: Record<string, string> = {},
 ): string {
-	return agents
+	const header = [
+		`batch_status: working`,
+		`batch_size: ${agents.length}`,
+		"next_step: Use codex_resume to steer running workers, and codex_list or codex_inspect to monitor progress.",
+	];
+	const body = agents
 		.map((agent, index) =>
 			[
 				`## ${index + 1}. ${agent.name}`,
@@ -71,6 +77,7 @@ export function formatSpawnBatchResults(
 			].join("\n")
 		)
 		.join("\n\n---\n\n");
+	return `${header.join("\n")}\n\n${body}`;
 }
 
 export function resolveSpawnRenderBody(result: SpawnResultMessage): string {

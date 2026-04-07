@@ -12,17 +12,18 @@ function createAgent(overrides: Record<string, unknown> = {}) {
 		name: "Tony",
 		model: "gpt-5.4",
 		effort: "high",
-		state: "completed",
+		threadId: "thread-1",
+		state: "working",
 		usage: deriveUsageSnapshot({ tokensUsed: 56_000, tokenLimit: 258_000 }, "turn-1", 1),
 		compaction: null,
 		latestSnippet: "latest",
-		latestFinalOutput: "Implemented the requested change.",
+		latestFinalOutput: null,
 		messages: [],
 		...overrides,
 	};
 }
 
-test("single-agent spawn results include identity, capacity, model, effort, prompt, and final output", () => {
+test("single-agent spawn results include launch identity, prompt, and next steps", () => {
 	const text = formatSpawnAgentResult(createAgent(), {
 		prompt: "Fix the DOE footer.",
 	});
@@ -31,7 +32,9 @@ test("single-agent spawn results include identity, capacity, model, effort, prom
 		text,
 		[
 			"ic: Tony",
-			"state: completed",
+			"agent_id: agent-1",
+			"thread_id: thread-1",
+			"state: working",
 			"capacity: 22%",
 			"model: gpt-5.4",
 			"effort: high",
@@ -39,21 +42,21 @@ test("single-agent spawn results include identity, capacity, model, effort, prom
 			"prompt:",
 			"Fix the DOE footer.",
 			"",
-			"result:",
-			"Implemented the requested change.",
+			"next_step:",
+			"Worker launched and running in the background. Use codex_resume to steer, and use codex_list or codex_inspect to monitor progress.",
 		].join("\n"),
 	);
 });
 
 test("single-agent spawn render body uses the full tool result instead of a collapsed summary", () => {
 	const text = resolveSpawnRenderBody({
-		content: [{ type: "text", text: "ic: Tony\nstate: completed\ncapacity: 22%" }],
+		content: [{ type: "text", text: "ic: Tony\nstate: working\ncapacity: 22%" }],
 		details: {
 			agents: [createAgent()],
 		},
 	});
 
-	assert.equal(text, "ic: Tony\nstate: completed\ncapacity: 22%");
+	assert.equal(text, "ic: Tony\nstate: working\ncapacity: 22%");
 });
 
 test("single-agent spawn result strips shared session context preamble from displayed prompt", () => {
@@ -72,7 +75,7 @@ test("single-agent spawn result strips shared session context preamble from disp
 	assert.doesNotMatch(text, /Shared session context:/);
 });
 
-test("single-agent spawn result does not show queued placeholder when no final output is present", () => {
+test("single-agent spawn result does not include a final result section", () => {
 	const text = formatSpawnAgentResult(
 		createAgent({
 			latestFinalOutput: "queued: Shared session context: ...",
@@ -82,6 +85,6 @@ test("single-agent spawn result does not show queued placeholder when no final o
 		{ prompt: "Investigate why cards show queued output." },
 	);
 
-	assert.match(text, /result:\nCompleted/);
-	assert.doesNotMatch(text, /result:\nqueued:/);
+	assert.match(text, /next_step:\nWorker launched and running in the background\./);
+	assert.doesNotMatch(text, /result:/);
 });

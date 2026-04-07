@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ApprovalPolicy, ReasoningEffort, SandboxMode } from "../codex/client.ts";
-import { extractLastCompletedAgentMessage, truncateForDisplay } from "../codex/client.ts";
+import { truncateForDisplay } from "../codex/client.ts";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.ts";
 import { getSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.ts";
 import type { ICRole, NotificationMode, SeatRole } from "../roster/types.ts";
@@ -334,48 +334,23 @@ async function runTasks(input: {
 		await launchTask(input.execution.deps, taskContext);
 	}
 }
-async function waitForResults(context: SpawnBatchContext, input: SpawnExecutionInput) {
-	if (context.batchId) {
-		return input.deps.registry.waitForBatch(context.batchId, input.signal);
-	}
-	return [await input.deps.registry.waitForAgent(context.agentIds[0], input.signal)];
+function readLaunchedAgents(deps: SpawnToolDeps, context: SpawnBatchContext): any[] {
+	return context.agentIds.map((agentId) => deps.registry.getAgent(agentId) ?? { id: agentId });
 }
-function needsOutputHydration(agent: any): boolean {
-	const output = typeof agent?.latestFinalOutput === "string" ? agent.latestFinalOutput.trim() : "";
-	return output.length === 0 || output.startsWith("queued:");
-}
-async function hydrateFinalAgentOutput(deps: SpawnToolDeps, agent: any): Promise<any> {
-	if (!agent?.threadId || !needsOutputHydration(agent)) {
-		return agent;
-	}
-	try {
-		const threadResponse = await deps.client.readThread(agent.threadId, true);
-		const finalText = extractLastCompletedAgentMessage(threadResponse.thread);
-		if (!finalText) {
-			return agent;
-		}
-		deps.registry.markCompleted(agent.threadId, agent.activeTurnId ?? null, finalText);
-		return deps.registry.getAgent(agent.id) ?? { ...agent, latestFinalOutput: finalText };
-	} catch {
-		return agent;
-	}
-}
-async function hydrateFinalOutputs(deps: SpawnToolDeps, agents: any[]): Promise<any[]> {
-	return Promise.all(agents.map((agent) => hydrateFinalAgentOutput(deps, agent)));
-}
-function buildResponse(context: SpawnBatchContext, finalAgents: any[]) {
+function buildResponse(context: SpawnBatchContext, agents: any[]) {
 	const text = context.batchId
-		? formatSpawnBatchResults(finalAgents, context.promptsByAgentId)
-		: formatSpawnAgentResult(finalAgents[0], {
-			prompt: context.promptsByAgentId[finalAgents[0].id] ?? null,
+		? formatSpawnBatchResults(agents, context.promptsByAgentId)
+		: formatSpawnAgentResult(agents[0], {
+			prompt: context.promptsByAgentId[agents[0].id] ?? null,
 		});
 	return {
 		content: [{ type: "text", text }],
 		details: {
 			batchId: context.batchId,
 			batchName: context.batchName,
-			agents: finalAgents,
+			agents,
 			promptsByAgentId: context.promptsByAgentId,
+			status: "working",
 		},
 	};
 }
@@ -406,9 +381,7 @@ async function executeSpawnLike(input: SpawnExecutionInput) {
 			tasks,
 			sessionSlug,
 		});
-		const initialAgents = await waitForResults(context, input);
-		const finalAgents = await hydrateFinalOutputs(input.deps, initialAgents);
-		return buildResponse(context, finalAgents);
+		return buildResponse(context, readLaunchedAgents(input.deps, context));
 	} catch (error) {
 		if (error instanceof Error && error.message === "Cancelled") {
 			await cancelRunningAgents(input.deps, context.agentIds);
