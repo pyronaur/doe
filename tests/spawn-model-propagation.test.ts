@@ -11,6 +11,14 @@ mockToolModules({
 
 const { registerSpawnTool } = await import("../src/tools/spawn.ts");
 
+interface SpawnTestClient {
+	threadCalls: Array<Record<string, unknown>>;
+	turnCalls: Array<Record<string, unknown>>;
+	startThread(options: Record<string, unknown>): Promise<{ thread: { id: string } }>;
+	startTurn(options: Record<string, unknown>): Promise<{ turn: { id: string } }>;
+	readThread?(threadId: string): Promise<{ thread: Record<string, unknown> }>;
+}
+
 class FakeSpawnClient {
 	threadCalls: Array<Record<string, unknown>> = [];
 	turnCalls: Array<Record<string, unknown>> = [];
@@ -39,6 +47,60 @@ class FakeSpawnClient {
 	}
 }
 
+function createLateRegistryClient(registry: DoeRegistry): SpawnTestClient {
+	const client: SpawnTestClient = {
+		threadCalls: [],
+		turnCalls: [],
+		async startThread(options: Record<string, unknown>) {
+			client.threadCalls.push(options);
+			return { thread: { id: `thread-${client.threadCalls.length}` } };
+		},
+		async startTurn(options: Record<string, unknown>) {
+			client.turnCalls.push(options);
+			const turnId = `turn-${client.turnCalls.length}`;
+			const threadId = String(options.threadId);
+			const text = `Final ${turnId}`;
+
+			setTimeout(() => {
+				registry.markCompleted(threadId, turnId, null);
+			}, 0);
+
+			setTimeout(() => {
+				registry.completeAgentMessage({
+					threadId,
+					turnId,
+					itemId: `item-${turnId}`,
+					text,
+				});
+			}, 15);
+
+			return { turn: { id: turnId } };
+		},
+		async readThread(threadId: string) {
+			const turnIndex = Number.parseInt(threadId.replace("thread-", ""), 10);
+			const turnId = Number.isFinite(turnIndex) && turnIndex > 0 ? `turn-${turnIndex}` : null;
+			const text = turnId ? `Final ${turnId}` : null;
+			return {
+				thread: {
+					id: threadId,
+					turns: turnId && text
+						? [{
+							id: turnId,
+							status: "completed",
+							items: [{
+								id: `item-${turnId}`,
+								type: "agentMessage",
+								text,
+							}],
+						}]
+						: [],
+				},
+			};
+		},
+	};
+	return client;
+}
+
 interface RegisteredTool {
 	name: string;
 	execute: (...args: unknown[]) => Promise<unknown>;
@@ -52,7 +114,7 @@ function getRegisteredTool(tools: Map<string, RegisteredTool>, name: string): Re
 	return tool;
 }
 
-async function createSpawnTool(registry: DoeRegistry, client: FakeSpawnClient) {
+async function createSpawnTool(registry: DoeRegistry, client: SpawnTestClient) {
 	const tools = new Map<string, RegisteredTool>();
 	const pi = {
 		registerTool(tool: RegisteredTool) {
@@ -78,7 +140,7 @@ test("codex_spawn inherits the assigned seat model and forwards it through threa
 	const result = await spawnTool.execute(
 		"tool-call-1",
 		{
-			ic: "Tony",
+			ic: "Pattern",
 			prompt: "Investigate why model defaults are not propagating.",
 			cwd: "/tmp",
 		},
@@ -87,7 +149,7 @@ test("codex_spawn inherits the assigned seat model and forwards it through threa
 		undefined,
 	);
 
-	assert.equal(registry.findSeat("Tony")?.model, "gpt-5.4");
+	assert.equal(registry.findSeat("Pattern")?.model, "gpt-5.4");
 	assert.equal(client.threadCalls[0]?.model, "gpt-5.4");
 	assert.equal(client.turnCalls[0]?.model, "gpt-5.4");
 	assert.equal(result.details.agents[0]?.model, "gpt-5.4");
@@ -139,4 +201,26 @@ test("codex_spawn requires an explicit or template-supplied model when overflow 
 		/Contractor assignments require an explicit model\./,
 	);
 	assert.equal(client.threadCalls.length, 0);
+});
+
+test("codex_spawn returns the actual final output when completion arrives before registry message hydration", async () => {
+	const registry = new DoeRegistry();
+	const client = createLateRegistryClient(registry);
+	const spawnTool = await createSpawnTool(registry, client);
+
+	const result = await spawnTool.execute(
+		"tool-call-4",
+		{
+			ic: "Pattern",
+			prompt: "Investigate queue/result mismatch.",
+			cwd: "/tmp",
+		},
+		undefined,
+		undefined,
+		undefined,
+	);
+
+	const text = String(result.content?.[0]?.text ?? "");
+	assert.match(text, /result:\nFinal turn-1/);
+	assert.doesNotMatch(text, /result:\nqueued:/);
 });
