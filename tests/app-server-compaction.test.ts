@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "./test-runner.ts";
 import { CodexAppServerClient } from "../src/codex/app-server-client.ts";
+import { test } from "./test-runner.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -182,12 +182,16 @@ test("CodexAppServerClient keeps turn sandbox and approval gates separate", asyn
 	assert.deepEqual(calls[0]?.params.sandboxPolicy, { type: "dangerFullAccess" });
 
 	sent.length = 0;
-	await Promise.resolve(callMethod(client, "handleServerRequest", [1, "item/commandExecution/requestApproval", {
-		threadId: "thread-1",
-	}]));
-	await Promise.resolve(callMethod(client, "handleServerRequest", [2, "item/fileChange/requestApproval", {
-		threadId: "thread-1",
-	}]));
+	await Promise.resolve(
+		callMethod(client, "handleServerRequest", [1, "item/commandExecution/requestApproval", {
+			threadId: "thread-1",
+		}]),
+	);
+	await Promise.resolve(
+		callMethod(client, "handleServerRequest", [2, "item/fileChange/requestApproval", {
+			threadId: "thread-1",
+		}]),
+	);
 
 	assert.deepEqual(sent[0], { id: 1, result: { decision: "decline" } });
 	assert.deepEqual(sent[1], { id: 2, result: { decision: "decline" } });

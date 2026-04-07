@@ -1,6 +1,5 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,19 +9,22 @@ import {
 	normalizeSessionSlug,
 	prepareSessionWorkspace,
 } from "../src/plan/slug.ts";
+import { test } from "./test-runner.ts";
 
 test("normalizeSessionSlug slugifies user input", () => {
 	assert.equal(normalizeSessionSlug(" Feature X / 2026 "), "feature-x-2026");
 });
 
 test("normalizePlanSlug rejects empty slugs after normalization", () => {
-	assert.throws(() => normalizePlanSlug("!!!"), /planSlug must contain at least one letter or number/);
+	assert.throws(() => normalizePlanSlug("!!!"),
+		/planSlug must contain at least one letter or number/);
 });
 
 test("session workspace and plan file paths stay under .tmp/session-slug", () => {
 	const repoRoot = "/repo";
 	assert.equal(getSessionWorkspacePath(repoRoot, "Feature X"), "/repo/.tmp/feature-x");
-	assert.equal(getPlanFilePath(repoRoot, "Feature X", "Auth Refactor"), "/repo/.tmp/feature-x/plan-auth-refactor.md");
+	assert.equal(getPlanFilePath(repoRoot, "Feature X", "Auth Refactor"),
+		"/repo/.tmp/feature-x/plan-auth-refactor.md");
 });
 
 test("prepareSessionWorkspace requires explicit allowExisting for non-empty workspaces", () => {

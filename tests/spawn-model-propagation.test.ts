@@ -1,36 +1,13 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { mock } from "bun:test";
 import { DoeRegistry } from "../src/roster/registry.ts";
+import { test } from "./test-runner.ts";
+import { mockToolModules } from "./tool-module-mocks.ts";
 
-mock.module("@sinclair/typebox", () => ({
-	Type: {
-		Object: (value: unknown) => value,
-		String: () => ({ type: "string" }),
-		Optional: (value: unknown) => value,
-		Boolean: () => ({ type: "boolean" }),
-		Record: (key: unknown, value: unknown) => ({ type: "record", key, value }),
-		Any: () => ({ type: "any" }),
-		Array: (value: unknown) => ({ type: "array", value }),
-	},
-}));
-
-mock.module("@mariozechner/pi-ai", () => ({
-	StringEnum: (value: unknown) => value,
-}));
-
-mock.module("@mariozechner/pi-tui", () => ({
-	Container: class Container {},
-	Text: class Text {
-		constructor(
-			public readonly text: string,
-			public readonly x = 0,
-			public readonly y = 0,
-		) {}
-	},
-}));
-
-mock.module("@mariozechner/pi-coding-agent", () => ({}));
+mockToolModules({
+	includeContainer: true,
+	includePiAi: true,
+	includeTypeboxCollections: true,
+});
 
 const { registerSpawnTool } = await import("../src/tools/spawn.ts");
 
@@ -39,8 +16,11 @@ class FakeSpawnClient {
 	turnCalls: Array<Record<string, unknown>> = [];
 	private nextThread = 0;
 	private nextTurn = 0;
+	private readonly registry: DoeRegistry;
 
-	constructor(private readonly registry: DoeRegistry) {}
+	constructor(registry: DoeRegistry) {
+		this.registry = registry;
+	}
 
 	async startThread(options: Record<string, unknown>) {
 		this.threadCalls.push(options);
@@ -59,22 +39,35 @@ class FakeSpawnClient {
 	}
 }
 
+interface RegisteredTool {
+	name: string;
+	execute: (...args: unknown[]) => Promise<unknown>;
+}
+
+function getRegisteredTool(tools: Map<string, RegisteredTool>, name: string): RegisteredTool {
+	const tool = tools.get(name);
+	if (!tool) {
+		throw new Error(`Missing tool "${name}".`);
+	}
+	return tool;
+}
+
 async function createSpawnTool(registry: DoeRegistry, client: FakeSpawnClient) {
-	const tools = new Map<string, any>();
+	const tools = new Map<string, RegisteredTool>();
 	const pi = {
-		registerTool(tool: any) {
+		registerTool(tool: RegisteredTool) {
 			tools.set(tool.name, tool);
 		},
-	} as any;
+	};
 
-	registerSpawnTool(pi, {
-		client: client as any,
+	Reflect.apply(registerSpawnTool, undefined, [pi, {
+		client,
 		registry,
 		templatesDir: process.cwd(),
 		getSessionSlug: () => "feature-x",
-	});
+	}]);
 
-	return tools.get("codex_spawn");
+	return getRegisteredTool(tools, "codex_spawn");
 }
 
 test("codex_spawn inherits the assigned seat model and forwards it through thread/start", async () => {
@@ -126,7 +119,7 @@ test("codex_spawn requires an explicit or template-supplied model when overflow 
 	const registry = new DoeRegistry();
 	registry.assignSeat({ agentId: "existing-1", role: "mid" });
 	registry.assignSeat({ agentId: "existing-2", role: "mid" });
-	registry.assignSeat({ agentId: "existing-3", role: "mid" });
+	registry.assignSeat({ agentId: "existing-3", role: "mid", model: "gpt-5.4" });
 	const client = new FakeSpawnClient(registry);
 	const spawnTool = await createSpawnTool(registry, client);
 

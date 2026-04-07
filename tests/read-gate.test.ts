@@ -1,17 +1,17 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	NON_IMAGE_READ_BLOCK_REASON,
-	NON_IMAGE_READ_NO_UI_REASON,
 	buildNonImageReadApprovalMessage,
 	classifyReadPath,
 	ensureReadToolActive,
 	evaluateReadGate,
+	NON_IMAGE_READ_BLOCK_REASON,
+	NON_IMAGE_READ_NO_UI_REASON,
 	resolveReadPathForGate,
 } from "../src/read-gate.ts";
+import { test } from "./test-runner.ts";
 
 async function withTempDir(fn: (dir: string) => Promise<void> | void) {
 	const dir = mkdtempSync(join(tmpdir(), "doe-read-gate-"));
@@ -29,10 +29,18 @@ function writeBytes(path: string, bytes: number[]) {
 test("classifyReadPath treats supported image signatures as images", async () => {
 	await withTempDir(async (dir) => {
 		const fixtures = [
-			{ name: "image.png", bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], mimeType: "image/png" },
+			{
+				name: "image.png",
+				bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+				mimeType: "image/png",
+			},
 			{ name: "image.jpg", bytes: [0xff, 0xd8, 0xff, 0xdb], mimeType: "image/jpeg" },
 			{ name: "image.gif", bytes: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61], mimeType: "image/gif" },
-			{ name: "image.webp", bytes: [0x52, 0x49, 0x46, 0x46, 0x24, 0, 0, 0, 0x57, 0x45, 0x42, 0x50], mimeType: "image/webp" },
+			{
+				name: "image.webp",
+				bytes: [0x52, 0x49, 0x46, 0x46, 0x24, 0, 0, 0, 0x57, 0x45, 0x42, 0x50],
+				mimeType: "image/webp",
+			},
 		] as const;
 
 		for (const fixture of fixtures) {
@@ -81,7 +89,8 @@ test("resolveReadPathForGate expands tilde and macOS screenshot variants", async
 
 		const amPmTarget = join(screenshotDir, `CleanShot 2026-04-06 at 10.36.22${"\u202F"}PM.png`);
 		writeFileSync(amPmTarget, "x");
-		const amPmResolved = resolveReadPathForGate("shots/CleanShot 2026-04-06 at 10.36.22 PM.png", dir);
+		const amPmResolved = resolveReadPathForGate("shots/CleanShot 2026-04-06 at 10.36.22 PM.png",
+			dir);
 		assert.equal(amPmResolved, amPmTarget);
 
 		const nfdCurlyTarget = join(screenshotDir, "Capture d’écran.png".normalize("NFD"));

@@ -1,6 +1,10 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { formatAgentProgressLine, formatAgentProgressSummary, resolveRunStartedAt } from "../src/ui/agent-progress.ts";
+import {
+	formatAgentProgressLine,
+	formatAgentProgressSummary,
+	resolveRunStartedAt,
+} from "../src/ui/agent-progress.ts";
+import { test } from "./test-runner.ts";
 
 test("progress line uses runStartedAt so resume timing resets independently from thread lifetime", () => {
 	const line = formatAgentProgressLine(
@@ -9,8 +13,20 @@ test("progress line uses runStartedAt so resume timing resets independently from
 			state: "working",
 			activityLabel: "thinking",
 			usage: {
-				total: { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 },
-				last: { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 },
+				total: {
+					totalTokens: 0,
+					inputTokens: 0,
+					cachedInputTokens: 0,
+					outputTokens: 0,
+					reasoningOutputTokens: 0,
+				},
+				last: {
+					totalTokens: 0,
+					inputTokens: 0,
+					cachedInputTokens: 0,
+					outputTokens: 0,
+					reasoningOutputTokens: 0,
+				},
 				modelContextWindow: 258_000,
 				turnId: "turn-1",
 				tokensUsed: 56_000,

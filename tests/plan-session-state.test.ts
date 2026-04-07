@@ -1,11 +1,11 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import {
 	createEmptyPlanState,
+	type DoePlanState,
 	restoreLatestPlanState,
 	serializePlanState,
-	type DoePlanState,
 } from "../src/plan/session-state.ts";
+import { test } from "./test-runner.ts";
 
 test("restoreLatestPlanState returns defaults when no plan entry exists", () => {
 	assert.deepEqual(restoreLatestPlanState([]), createEmptyPlanState());

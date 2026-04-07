@@ -1,6 +1,6 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "../src/plan/reminder.ts";
+import { test } from "./test-runner.ts";
 
 test("estimateCurrentTurnIndex counts prior assistant turns", () => {
 	assert.equal(

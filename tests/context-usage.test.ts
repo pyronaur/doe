@@ -1,6 +1,10 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { deriveUsageSnapshot, formatCompactionSignal, formatUsageCompact } from "../src/context-usage.ts";
+import {
+	deriveUsageSnapshot,
+	formatCompactionSignal,
+	formatUsageCompact,
+} from "../src/context-usage.ts";
+import { test } from "./test-runner.ts";
 
 test("formatUsageCompact renders current effective usage as percent and token count", () => {
 	const snapshot = deriveUsageSnapshot({ tokensUsed: 204_000, tokenLimit: 258_000 }, "turn-1", 1);

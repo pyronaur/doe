@@ -1,10 +1,10 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import {
 	extractLastCompletedAgentMessage,
 	extractThreadFileChanges,
 	extractThreadQueryEntries,
 } from "../src/codex/client.ts";
+import { test } from "./test-runner.ts";
 
 test("extractThreadFileChanges aggregates fileChange items and preserves unavailable stats", () => {
 	const thread = {
@@ -34,7 +34,12 @@ test("extractThreadQueryEntries includes text, command, and file summaries for t
 				items: [
 					{ id: "u1", type: "userMessage", text: "Investigate auth failure" },
 					{ id: "a1", type: "agentMessage", text: "Found the root cause in middleware" },
-					{ id: "c1", type: "commandExecution", command: "rg auth middleware", stdout: "src/auth.ts" },
+					{
+						id: "c1",
+						type: "commandExecution",
+						command: "rg auth middleware",
+						stdout: "src/auth.ts",
+					},
 					{ id: "f1", type: "fileChange", path: "src/auth.ts", addedLines: 4, removedLines: 2 },
 				],
 			},
@@ -43,9 +48,24 @@ test("extractThreadQueryEntries includes text, command, and file summaries for t
 
 	assert.deepEqual(extractThreadQueryEntries(thread), [
 		{ turnId: "turn-1", itemId: "u1", itemType: "userMessage", text: "Investigate auth failure" },
-		{ turnId: "turn-1", itemId: "a1", itemType: "agentMessage", text: "Found the root cause in middleware" },
-		{ turnId: "turn-1", itemId: "c1", itemType: "commandExecution", text: "$ rg auth middleware\nsrc/auth.ts" },
-		{ turnId: "turn-1", itemId: "f1", itemType: "fileChange", text: "fileChange src/auth.ts (+4/-2)" },
+		{
+			turnId: "turn-1",
+			itemId: "a1",
+			itemType: "agentMessage",
+			text: "Found the root cause in middleware",
+		},
+		{
+			turnId: "turn-1",
+			itemId: "c1",
+			itemType: "commandExecution",
+			text: "$ rg auth middleware\nsrc/auth.ts",
+		},
+		{
+			turnId: "turn-1",
+			itemId: "f1",
+			itemType: "fileChange",
+			text: "fileChange src/auth.ts (+4/-2)",
+		},
 	]);
 });
 

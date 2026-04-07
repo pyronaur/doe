@@ -1,10 +1,10 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { deriveUsageSnapshot } from "../src/context-usage.ts";
 import {
 	formatSpawnAgentResult,
 	resolveSpawnRenderBody,
 } from "../src/tools/spawn-result.ts";
+import { test } from "./test-runner.ts";
 
 function createAgent(overrides: Record<string, unknown> = {}) {
 	return {

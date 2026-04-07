@@ -1,33 +1,12 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { DoeRegistry } from "../src/roster/registry.ts";
-import type { AgentRecord } from "../src/roster/types.ts";
-
-function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
-	return {
-		id: "agent-1",
-		name: "Agent 1",
-		cwd: "/tmp",
-		model: "gpt-5.4",
-		state: "working",
-		latestSnippet: "",
-		latestFinalOutput: null,
-		lastError: null,
-		startedAt: 1,
-		completedAt: null,
-		parentBatchId: null,
-		notificationMode: "notify_each",
-		returnMode: "wait",
-		messages: [],
-		historyHydratedAt: null,
-		...overrides,
-	};
-}
+import { createRegistryAgent } from "./registry-fixtures.ts";
+import { test } from "./test-runner.ts";
 
 test("hydrateAgentMessages backfills history without overwriting newer live transcript", () => {
 	const registry = new DoeRegistry();
 	registry.upsertAgent(
-		createAgent({
+		createRegistryAgent({
 			threadId: "thread-1",
 			messages: [
 				{

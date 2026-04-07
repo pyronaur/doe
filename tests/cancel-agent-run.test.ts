@@ -1,44 +1,20 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { DoeRegistry } from "../src/roster/registry.ts";
-import type { AgentRecord } from "../src/roster/types.ts";
 import { cancelAgentRun } from "../src/tools/cancel-agent-run.ts";
-
-function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
-	return {
-		id: "agent-1",
-		name: "Agent 1",
-		cwd: "/tmp",
-		model: "gpt-5.4",
-		state: "working",
-		latestSnippet: "",
-		latestFinalOutput: null,
-		lastError: null,
-		startedAt: 1,
-		runStartedAt: 1,
-		completedAt: null,
-		parentBatchId: null,
-		notificationMode: "notify_each",
-		returnMode: "wait",
-		messages: [],
-		historyHydratedAt: null,
-		...overrides,
-	};
-}
+import { attachSeatAgent, requireRegistryAgent } from "./registry-fixtures.ts";
+import { test } from "./test-runner.ts";
 
 test("cancelAgentRun interrupts, unsubscribes, and releases the seat by default", async () => {
 	const registry = new DoeRegistry();
-	const seat = registry.assignSeat({ agentId: "agent-1", ic: "Hope" });
-	registry.upsertAgent(
-		createAgent({
-			id: "agent-1",
-			name: seat.name,
-			threadId: "thread-1",
+	attachSeatAgent(registry, {
+		agentId: "agent-1",
+		ic: "Hope",
+		threadId: "thread-1",
+		agent: {
 			activeTurnId: "turn-1",
-			seatName: seat.name,
-			seatRole: seat.role,
-		}),
-	);
+			runStartedAt: 1,
+		},
+	});
 
 	const calls: string[] = [];
 	const client = {
@@ -48,10 +24,10 @@ test("cancelAgentRun interrupts, unsubscribes, and releases the seat by default"
 		async unsubscribeThread(threadId: string) {
 			calls.push(`unsubscribe:${threadId}`);
 		},
-	} as any;
+	};
 
 	const updated = await cancelAgentRun({
-		agent: registry.getAgent("agent-1")!,
+		agent: requireRegistryAgent(registry, "agent-1"),
 		client,
 		registry,
 		note: "Cancelled by Director of Engineering.",

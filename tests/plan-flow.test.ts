@@ -1,4 +1,3 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +9,7 @@ import {
 	injectSharedKnowledgebaseContext,
 	preparePlanFile,
 } from "../src/plan/flow.ts";
+import { test } from "./test-runner.ts";
 
 test("injectSharedKnowledgebaseContext prefixes the shared session directory", () => {
 	const context = getSharedKnowledgebaseContext("/repo", "feature-x");
@@ -46,8 +46,8 @@ test("buildPlanResumePrompt includes feedback, commentary, and fixed output path
 	assert.match(prompt, /<review_feedback>/);
 	assert.match(prompt, /Add rollout and test coverage\./);
 	assert.match(prompt, /<\/review_feedback>/);
-	assert.match(prompt, /<director_commentary>/);
+	assert.match(prompt, /<additional_instructions>/);
 	assert.match(prompt, /Keep scope limited to the auth service\./);
-	assert.match(prompt, /<\/director_commentary>/);
+	assert.match(prompt, /<\/additional_instructions>/);
 	assert.match(prompt, /Rewrite the plan only at: \/repo\/.tmp\/feature-x\/plan-auth-refactor\.md/);
 });

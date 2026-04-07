@@ -1,28 +1,8 @@
 import assert from "node:assert/strict";
-import { test } from "./test-runner.ts";
 import { DoeRegistry } from "../src/roster/registry.ts";
-import type { AgentRecord, PersistedRegistrySnapshot } from "../src/roster/types.ts";
-
-function createAgent(overrides: Partial<AgentRecord> = {}): AgentRecord {
-	return {
-		id: "agent-1",
-		name: "Agent 1",
-		cwd: "/tmp",
-		model: "gpt-5.4",
-		state: "working",
-		latestSnippet: "",
-		latestFinalOutput: null,
-		lastError: null,
-		startedAt: 1,
-		completedAt: null,
-		parentBatchId: null,
-		notificationMode: "notify_each",
-		returnMode: "wait",
-		messages: [],
-		historyHydratedAt: null,
-		...overrides,
-	};
-}
+import type { PersistedRegistrySnapshot } from "../src/roster/types.ts";
+import { attachSeatAgent, createRegistryAgent } from "./registry-fixtures.ts";
+import { test } from "./test-runner.ts";
 
 test("registry seeds fixed IC roster in role order", () => {
 	const registry = new DoeRegistry();
@@ -76,13 +56,18 @@ test("contractor numbering is stable across serialize and restore", () => {
 	assert.equal(contractor1.name, "contractor-1");
 
 	registry.upsertAgent(
-		createAgent({ id: "agent-1", name: peter.name, seatName: peter.name, seatRole: peter.role }),
+		createRegistryAgent({
+			id: "agent-1",
+			name: peter.name,
+			seatName: peter.name,
+			seatRole: peter.role,
+		}),
 	);
 	registry.upsertAgent(
-		createAgent({ id: "agent-2", name: sam.name, seatName: sam.name, seatRole: sam.role }),
+		createRegistryAgent({ id: "agent-2", name: sam.name, seatName: sam.name, seatRole: sam.role }),
 	);
 	registry.upsertAgent(
-		createAgent({
+		createRegistryAgent({
 			id: "agent-3",
 			name: contractor1.name,
 			seatName: contractor1.name,
@@ -119,24 +104,14 @@ test("restore rejects contractor seats that are missing a persisted model", () =
 		},
 	};
 	assert.throws(
-		() =>
-			Reflect.apply(registry.restore, registry, [invalidSnapshot]),
+		() => registry.restore(invalidSnapshot),
 		/Stored contractor seat "contractor-1" is missing a model\./,
 	);
 });
 
 test("completed named seats remain attached until finalize", () => {
 	const registry = new DoeRegistry();
-	const seat = registry.assignSeat({ agentId: "agent-1", ic: "Tony" });
-	registry.upsertAgent(
-		createAgent({
-			id: "agent-1",
-			name: seat.name,
-			threadId: "thread-1",
-			seatName: seat.name,
-			seatRole: seat.role,
-		}),
-	);
+	attachSeatAgent(registry, { agentId: "agent-1", ic: "Tony", threadId: "thread-1" });
 
 	assert.equal(registry.findActiveSeatAgent("tony")?.id, "agent-1");
 	registry.markCompleted("thread-1", "done");
@@ -152,9 +127,14 @@ test("legacy snapshot restore attaches exact-name completed agents to fixed seat
 		version: 3,
 		savedAt: Date.now(),
 		agents: [
-			createAgent({ id: "agent-1", name: "Tony", threadId: "thread-1", state: "working" }),
-			createAgent({ id: "agent-2", name: "random worker", threadId: "thread-2", state: "working" }),
-			createAgent({
+			createRegistryAgent({ id: "agent-1", name: "Tony", threadId: "thread-1", state: "working" }),
+			createRegistryAgent({
+				id: "agent-2",
+				name: "random worker",
+				threadId: "thread-2",
+				state: "working",
+			}),
+			createRegistryAgent({
 				id: "agent-3",
 				name: "Bruce",
 				threadId: "thread-3",
@@ -175,16 +155,7 @@ test("legacy snapshot restore attaches exact-name completed agents to fixed seat
 
 test("finalize releases completed seats but rejects active running work", () => {
 	const registry = new DoeRegistry();
-	const seat = registry.assignSeat({ agentId: "agent-1", ic: "Hope" });
-	registry.upsertAgent(
-		createAgent({
-			id: "agent-1",
-			name: seat.name,
-			threadId: "thread-1",
-			seatName: seat.name,
-			seatRole: seat.role,
-		}),
-	);
+	attachSeatAgent(registry, { agentId: "agent-1", ic: "Hope", threadId: "thread-1" });
 
 	assert.throws(() => registry.finalizeSeat("Hope"), /still working/);
 	registry.markCompleted("thread-1", "Need DOE input");
@@ -200,16 +171,7 @@ test("finalize releases completed seats but rejects active running work", () => 
 
 test("fresh assignment on the same seat requires finalize after completion", () => {
 	const registry = new DoeRegistry();
-	const firstSeat = registry.assignSeat({ agentId: "agent-1", ic: "Hope" });
-	registry.upsertAgent(
-		createAgent({
-			id: "agent-1",
-			name: firstSeat.name,
-			threadId: "thread-1",
-			seatName: firstSeat.name,
-			seatRole: firstSeat.role,
-		}),
-	);
+	attachSeatAgent(registry, { agentId: "agent-1", ic: "Hope", threadId: "thread-1" });
 	registry.markCompleted("thread-1", "done");
 
 	assert.throws(
@@ -217,16 +179,7 @@ test("fresh assignment on the same seat requires finalize after completion", () 
 		/occupied by a completed assignment.*codex_resume.*codex_finalize/,
 	);
 	registry.finalizeSeat("Hope");
-	const secondSeat = registry.assignSeat({ agentId: "agent-2", ic: "Hope" });
-	registry.upsertAgent(
-		createAgent({
-			id: "agent-2",
-			name: secondSeat.name,
-			threadId: "thread-2",
-			seatName: secondSeat.name,
-			seatRole: secondSeat.role,
-		}),
-	);
+	attachSeatAgent(registry, { agentId: "agent-2", ic: "Hope", threadId: "thread-2" });
 
 	assert.equal(registry.findActiveSeatAgent("Hope")?.id, "agent-2");
 	assert.equal(registry.findActiveSeatAgent("Hope")?.threadId, "thread-2");
@@ -236,16 +189,7 @@ test("fresh assignment on the same seat requires finalize after completion", () 
 
 test("restore keeps completed seat attachments name-first without marking them recoverable", () => {
 	const registry = new DoeRegistry();
-	const seat = registry.assignSeat({ agentId: "agent-1", ic: "Tony" });
-	registry.upsertAgent(
-		createAgent({
-			id: "agent-1",
-			name: seat.name,
-			threadId: "thread-1",
-			seatName: seat.name,
-			seatRole: seat.role,
-		}),
-	);
+	attachSeatAgent(registry, { agentId: "agent-1", ic: "Tony", threadId: "thread-1" });
 	registry.markCompleted("thread-1", "done");
 
 	const restored = new DoeRegistry();
@@ -262,7 +206,7 @@ test("legacy snapshots gain runStartedAt from startedAt during restore", () => {
 		version: 4,
 		savedAt: Date.now(),
 		agents: [
-			createAgent({
+			createRegistryAgent({
 				id: "agent-1",
 				name: "Tony",
 				threadId: "thread-1",
@@ -279,17 +223,12 @@ test("legacy snapshots gain runStartedAt from startedAt during restore", () => {
 
 test("cancelAgent releases the seat and ignores late completion for the interrupted turn", () => {
 	const registry = new DoeRegistry();
-	const seat = registry.assignSeat({ agentId: "agent-1", ic: "Hope" });
-	registry.upsertAgent(
-		createAgent({
-			id: "agent-1",
-			name: seat.name,
-			threadId: "thread-1",
-			activeTurnId: "turn-1",
-			seatName: seat.name,
-			seatRole: seat.role,
-		}),
-	);
+	attachSeatAgent(registry, {
+		agentId: "agent-1",
+		ic: "Hope",
+		threadId: "thread-1",
+		agent: { activeTurnId: "turn-1" },
+	});
 
 	const cancelled = registry.cancelAgent("agent-1", {
 		note: "Cancelled by Director of Engineering.",
