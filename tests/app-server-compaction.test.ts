@@ -203,7 +203,6 @@ test("CodexAppServerClient grants requested permissions when approved", async ()
 			assert.equal(request.threadId, "thread-1");
 			assert.equal(request.turnId, "turn-1");
 			assert.equal(request.itemId, "item-1");
-			assert.equal(request.scope, "session");
 			assert.equal(request.reason, "Need write access for this patch");
 			return { approved: true };
 		},
@@ -218,7 +217,6 @@ test("CodexAppServerClient grants requested permissions when approved", async ()
 			threadId: "thread-1",
 			turnId: "turn-1",
 			itemId: "item-1",
-			scope: "session",
 			reason: "Need write access for this patch",
 			permissions: {
 				fileSystem: { write: ["/tmp/target.ts"] },
@@ -234,17 +232,14 @@ test("CodexAppServerClient grants requested permissions when approved", async ()
 				fileSystem: { write: ["/tmp/target.ts"] },
 				network: { enabled: true },
 			},
-			scope: "session",
+			scope: "turn",
 		},
 	});
 });
 
 test("CodexAppServerClient denies requested permissions when declined", async () => {
 	const client = new CodexAppServerClient({
-		requestPermissionApproval: async (request) => {
-			assert.equal(request.scope, "turn");
-			return { approved: false };
-		},
+		requestPermissionApproval: async () => ({ approved: false }),
 	});
 	const sent: unknown[] = [];
 	setMethod(client, "send", (message) => {
@@ -256,7 +251,6 @@ test("CodexAppServerClient denies requested permissions when declined", async ()
 			threadId: "thread-1",
 			turnId: "turn-1",
 			itemId: "item-2",
-			scope: "turn",
 			permissions: {
 				fileSystem: { read: ["/tmp/data.json"] },
 			},
@@ -265,6 +259,111 @@ test("CodexAppServerClient denies requested permissions when declined", async ()
 
 	assert.deepEqual(sent[0], {
 		id: 4,
+		result: {
+			permissions: {},
+			scope: "turn",
+		},
+	});
+});
+
+test("CodexAppServerClient treats missing permission reason as null", async () => {
+	const client = new CodexAppServerClient({
+		requestPermissionApproval: async (request) => {
+			assert.equal(request.reason, null);
+			return { approved: false };
+		},
+	});
+	const sent: unknown[] = [];
+	setMethod(client, "send", (message) => {
+		sent.push(message);
+	});
+
+	await Promise.resolve(
+		callMethod(client, "handleServerRequest", [5, "item/permissions/requestApproval", {
+			threadId: "thread-1",
+			turnId: "turn-1",
+			itemId: "item-3",
+			permissions: {
+				fileSystem: { read: ["/tmp/readme.md"] },
+			},
+		}]),
+	);
+
+	assert.deepEqual(sent[0], {
+		id: 5,
+		result: {
+			permissions: {},
+			scope: "turn",
+		},
+	});
+});
+
+test("CodexAppServerClient supports partial permission approval", async () => {
+	const client = new CodexAppServerClient({
+		requestPermissionApproval: async () => ({
+			approved: true,
+			permissions: {
+				fileSystem: { read: ["/tmp/safe-read-only.txt"] },
+			},
+			scope: "session",
+		}),
+	});
+	const sent: unknown[] = [];
+	setMethod(client, "send", (message) => {
+		sent.push(message);
+	});
+
+	await Promise.resolve(
+		callMethod(client, "handleServerRequest", [6, "item/permissions/requestApproval", {
+			threadId: "thread-1",
+			turnId: "turn-1",
+			itemId: "item-4",
+			permissions: {
+				fileSystem: {
+					read: ["/tmp/safe-read-only.txt"],
+					write: ["/tmp/blocked-write.txt"],
+				},
+				network: { enabled: true },
+			},
+		}]),
+	);
+
+	assert.deepEqual(sent[0], {
+		id: 6,
+		result: {
+			permissions: {
+				fileSystem: { read: ["/tmp/safe-read-only.txt"] },
+			},
+			scope: "session",
+		},
+	});
+});
+
+test("CodexAppServerClient denies malformed permission approval requests without crashing", async () => {
+	let callbackCalls = 0;
+	const client = new CodexAppServerClient({
+		requestPermissionApproval: async () => {
+			callbackCalls += 1;
+			return { approved: true };
+		},
+	});
+	const sent: unknown[] = [];
+	setMethod(client, "send", (message) => {
+		sent.push(message);
+	});
+
+	await Promise.resolve(
+		callMethod(client, "handleServerRequest", [7, "item/permissions/requestApproval", {
+			turnId: "turn-1",
+			permissions: {
+				fileSystem: { write: ["/tmp/target.ts"] },
+			},
+		}]),
+	);
+
+	assert.equal(callbackCalls, 0);
+	assert.deepEqual(sent[0], {
+		id: 7,
 		result: {
 			permissions: {},
 			scope: "turn",

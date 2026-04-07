@@ -42,7 +42,6 @@ export interface PermissionApprovalRequest {
 	itemId: string;
 	reason: string | null;
 	permissions: PermissionProfile;
-	scope: PermissionGrantScope;
 }
 
 export interface PermissionApprovalResult {
@@ -73,8 +72,11 @@ function normalizePermissionProfile(value: unknown): PermissionProfile {
 	const fileSystem = isRecord(value.fileSystem) ? value.fileSystem : null;
 	const network = isRecord(value.network) ? value.network : null;
 	if (fileSystem || value.fileSystem === null) {
-		profile.fileSystem = {};
+		if (!fileSystem) {
+			profile.fileSystem = null;
+		}
 		if (fileSystem) {
+			profile.fileSystem = {};
 			const read = normalizePathList(fileSystem.read);
 			const write = normalizePathList(fileSystem.write);
 			if (read !== undefined) {
@@ -83,18 +85,17 @@ function normalizePermissionProfile(value: unknown): PermissionProfile {
 			if (write !== undefined) {
 				profile.fileSystem.write = write;
 			}
-		} else {
-			profile.fileSystem = null;
 		}
 	}
 	if (network || value.network === null) {
+		if (!network) {
+			profile.network = null;
+		}
 		if (network) {
 			const enabled = typeof network.enabled === "boolean" || network.enabled === null
 				? network.enabled
 				: undefined;
 			profile.network = enabled === undefined ? {} : { enabled };
-		} else {
-			profile.network = null;
 		}
 	}
 	return profile;
@@ -451,15 +452,17 @@ export class CodexAppServerClient extends EventEmitter {
 	private async handlePermissionApprovalRequest(
 		params: Record<string, unknown>,
 	): Promise<{ permissions: PermissionProfile; scope: PermissionGrantScope }> {
+		const fallbackScope: PermissionGrantScope = "turn";
 		const request: PermissionApprovalRequest = {
 			threadId: typeof params.threadId === "string" ? params.threadId : "",
 			turnId: typeof params.turnId === "string" ? params.turnId : "",
 			itemId: typeof params.itemId === "string" ? params.itemId : "",
 			reason: typeof params.reason === "string" ? params.reason : null,
 			permissions: normalizePermissionProfile(params.permissions),
-			scope: normalizeScope(params.scope),
 		};
-		const fallbackScope = request.scope;
+		if (!request.threadId || !request.turnId || !request.itemId) {
+			return { permissions: {}, scope: fallbackScope };
+		}
 		const onRequestApproval = this.options.requestPermissionApproval;
 		if (!onRequestApproval) {
 			return { permissions: {}, scope: fallbackScope };
