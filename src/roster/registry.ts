@@ -1,15 +1,15 @@
-import { IC_CONFIG } from "./config.js";
-import type { PersistedRegistrySnapshot, PersistedRosterSnapshot, RosterSeatRecord } from "./types.js";
-import { DoeRegistryRuntime } from "./registry-runtime.js";
+import { IC_CONFIG } from "./config.ts";
 import {
+	ATTACHED_STATES,
 	cloneAgent,
 	contractorNumber,
 	defaultSeatRecord,
 	findICConfigByName,
-	isAttachedState,
 	normalizeAgentRecord,
 	normalizeSeatName,
-} from "./registry-helpers.js";
+} from "./registry-helpers.ts";
+import { DoeRegistryRuntime } from "./registry-runtime.ts";
+import type { PersistedRegistrySnapshot, PersistedRosterSnapshot } from "./types.ts";
 
 export class DoeRegistry extends DoeRegistryRuntime {
 	serialize(): PersistedRegistrySnapshot {
@@ -41,9 +41,11 @@ export class DoeRegistry extends DoeRegistryRuntime {
 		}
 		if (snapshot.roster?.seats?.length) {
 			this.restoreRoster(snapshot.roster);
-		} else {
-			this.migrateLegacyRosterLinks();
+			this.normalizeRosterState();
+			this.emitChange();
+			return;
 		}
+		this.migrateLegacyRosterLinks();
 		this.normalizeRosterState();
 		this.emitChange();
 	}
@@ -51,7 +53,7 @@ export class DoeRegistry extends DoeRegistryRuntime {
 	private restoreRoster(roster: PersistedRosterSnapshot) {
 		this.resetRoster();
 		for (const storedSeat of roster.seats ?? []) {
-			const seat = storedSeat as Partial<RosterSeatRecord> & { name: string };
+			const seat = storedSeat;
 			const normalizedName = normalizeSeatName(seat.name);
 			const ic = findICConfigByName(seat.name);
 			if (ic) {
@@ -66,7 +68,7 @@ export class DoeRegistry extends DoeRegistryRuntime {
 				continue;
 			}
 			const number = contractorNumber(seat.name);
-			if (number === null) continue;
+			if (number === null) {continue;}
 			if (typeof seat.model !== "string" || !seat.model.trim()) {
 				throw new Error(`Stored contractor seat "${seat.name}" is missing a model.`);
 			}
@@ -83,7 +85,10 @@ export class DoeRegistry extends DoeRegistryRuntime {
 				lastReuseSummary: seat.lastReuseSummary ?? null,
 			});
 		}
-		const highestSeen = Math.max(0, ...this.listRosterSeats().map((seat) => contractorNumber(seat.name) ?? 0));
+		const highestSeen = Math.max(
+			0,
+			...this.listRosterSeats().map((seat) => contractorNumber(seat.name) ?? 0),
+		);
 		this.nextContractorNumber = Math.max(roster.nextContractorNumber ?? 1, highestSeen + 1);
 	}
 
@@ -91,14 +96,16 @@ export class DoeRegistry extends DoeRegistryRuntime {
 		for (const ic of IC_CONFIG) {
 			const agent = [...this.agents.values()].find(
 				(entry) =>
-					entry.name === ic.name &&
-					!entry.seatName &&
-					isAttachedState(entry.state) &&
-					!(this.seats.get(normalizeSeatName(ic.name))?.activeAgentId),
+					entry.name === ic.name
+					&& !entry.seatName
+					&& ATTACHED_STATES.has(entry.state)
+					&& !(this.seats.get(normalizeSeatName(ic.name))?.activeAgentId),
 			);
-			if (!agent) continue;
+			if (!agent) {continue;}
+			const seat = this.seats.get(normalizeSeatName(ic.name));
+			if (!seat) {continue;}
 			const nextSeat = {
-				...this.seats.get(normalizeSeatName(ic.name))!,
+				...seat,
 				activeAgentId: agent.id,
 			};
 			this.seats.set(normalizeSeatName(ic.name), nextSeat);
@@ -112,8 +119,15 @@ export class DoeRegistry extends DoeRegistryRuntime {
 	}
 
 	private normalizeRosterState() {
+		this.ensureSeatRecords();
+		this.repairSeatLinks();
+		this.reconcileAgentSeats();
+		this.updateNextContractorNumber();
+	}
+
+	private ensureSeatRecords() {
 		for (const agent of this.agents.values()) {
-			if (!agent.seatName) continue;
+			if (!agent.seatName) {continue;}
 			const key = normalizeSeatName(agent.seatName);
 			const existing = this.seats.get(key);
 			if (!existing) {
@@ -121,16 +135,18 @@ export class DoeRegistry extends DoeRegistryRuntime {
 				if (ic) {
 					this.seats.set(key, defaultSeatRecord({ name: ic.name, role: ic.role, model: ic.defaults.model }));
 					continue;
+					}
+					const number = contractorNumber(agent.seatName);
+					if (number === null) {continue;}
+					this.seats.set(key, defaultSeatRecord({ name: `contractor-${number}`, role: "contractor", model: agent.model }));
 				}
-				const number = contractorNumber(agent.seatName);
-				if (number === null) continue;
-				this.seats.set(key, defaultSeatRecord({ name: `contractor-${number}`, role: "contractor", model: agent.model }));
 			}
 		}
 
+	private repairSeatLinks() {
 		for (const seat of this.seats.values()) {
 			const active = seat.activeAgentId ? this.agents.get(seat.activeAgentId) : undefined;
-			if (active && !isAttachedState(active.state)) {
+			if (active && !ATTACHED_STATES.has(active.state)) {
 				seat.activeAgentId = null;
 				seat.lastFinishedAgentId = active.id;
 				seat.lastThreadId = active.threadId ?? seat.lastThreadId ?? null;
@@ -144,28 +160,38 @@ export class DoeRegistry extends DoeRegistryRuntime {
 				seat.lastFinishedAgentId = null;
 			}
 		}
+	}
 
+	private reconcileAgentSeats() {
 		for (const [id, agent] of this.agents.entries()) {
-			if (!agent.seatName) continue;
+			if (!agent.seatName) {continue;}
 			const seat = this.seats.get(normalizeSeatName(agent.seatName));
-			if (!seat) continue;
+			if (!seat) {continue;}
 			const next = {
 				...cloneAgent(agent),
 				name: seat.name,
 				seatRole: seat.role,
 			};
-			if (isAttachedState(next.state)) {
+			if (ATTACHED_STATES.has(next.state)) {
 				if (!seat.activeAgentId) {
 					seat.activeAgentId = next.id;
 				}
-			} else if (!seat.activeAgentId && !seat.lastFinishedAgentId) {
+				this.agents.set(id, next);
+				continue;
+			}
+			if (!seat.activeAgentId && !seat.lastFinishedAgentId) {
 				seat.lastFinishedAgentId = next.id;
 				seat.lastThreadId = next.threadId ?? seat.lastThreadId ?? null;
 			}
 			this.agents.set(id, next);
 		}
+	}
 
-		const highestSeen = Math.max(0, ...this.listRosterSeats().map((seat) => contractorNumber(seat.name) ?? 0));
+	private updateNextContractorNumber() {
+		const highestSeen = Math.max(
+			0,
+			...this.listRosterSeats().map((seat) => contractorNumber(seat.name) ?? 0),
+		);
 		this.nextContractorNumber = Math.max(this.nextContractorNumber, highestSeen + 1);
 	}
 }

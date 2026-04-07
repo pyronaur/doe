@@ -1,5 +1,16 @@
 import { EventEmitter } from "node:events";
-import { IC_CONFIG, SEAT_ROLE_LABELS, SEAT_ROLES } from "./config.js";
+import { IC_CONFIG, SEAT_ROLE_LABELS, SEAT_ROLES } from "./config.ts";
+import {
+	ATTACHED_STATES,
+	cloneAgent,
+	cloneSeat,
+	defaultSeatRecord,
+	normalizeSeatName,
+	RECOVERABLE_STATES,
+	seatSort,
+	tailSnippet,
+	TERMINAL_STATES,
+} from "./registry-helpers.ts";
 import type {
 	AgentLifecycleState,
 	AgentRecord,
@@ -12,18 +23,7 @@ import type {
 	RosterRoleSummary,
 	RosterSeatRecord,
 	SeatRole,
-} from "./types.js";
-import {
-	TERMINAL_STATES,
-	cloneAgent,
-	cloneSeat,
-	defaultSeatRecord,
-	isAttachedState,
-	isRecoverableState,
-	normalizeSeatName,
-	seatSort,
-	tailSnippet,
-} from "./registry-helpers.js";
+} from "./types.ts";
 
 export class DoeRegistryBase extends EventEmitter {
 	protected readonly agents = new Map<string, AgentRecord>();
@@ -68,12 +68,17 @@ export class DoeRegistryBase extends EventEmitter {
 		}
 		let seat = requestedIc
 			? this.requireSeatForAssignment(requestedIc)
-			: this.allocateSeat(requestedRole!, input.model ?? null);
+			: this.allocateSeat(requestedRole, input.model ?? null);
 		if (seat.role === "contractor") {
-			if (!requestedRole) throw new Error("Contractor assignments require an explicit role.");
-			if (!input.model) throw new Error("Contractor assignments require an explicit model.");
+			if (!requestedRole) {
+				throw new Error("Contractor assignments require an explicit role.");
+			}
+			if (!input.model) {
+				throw new Error("Contractor assignments require an explicit model.");
+			}
 			seat = { ...seat, model: input.model };
-		} else if (requestedRole && requestedRole !== seat.role) {
+		}
+		if (seat.role !== "contractor" && requestedRole && requestedRole !== seat.role) {
 			throw new Error(`${seat.name} is a ${seat.role} seat, not ${requestedRole}.`);
 		}
 		if (seat.activeAgentId && seat.activeAgentId !== input.agentId) {
@@ -90,7 +95,7 @@ export class DoeRegistryBase extends EventEmitter {
 		const next = cloneAgent(agent);
 		this.agents.set(agent.id, next);
 		this.syncSeatLinks(previous, next);
-		const current = this.getAgent(agent.id)!;
+		const current = next;
 		this.emit("event", { type: "agent-updated", agent: current } satisfies RegistryEvent);
 		if (current.state !== previous?.state && TERMINAL_STATES.has(current.state)) {
 			this.resolveAgent(current);
@@ -107,7 +112,7 @@ export class DoeRegistryBase extends EventEmitter {
 
 	getAgentByThreadId(threadId: string): AgentRecord | undefined {
 		for (const agent of this.agents.values()) {
-			if (agent.threadId === threadId) return cloneAgent(agent);
+			if (agent.threadId === threadId) {return cloneAgent(agent);}
 		}
 		return undefined;
 	}
@@ -119,24 +124,25 @@ export class DoeRegistryBase extends EventEmitter {
 
 	findActiveSeatAgent(name: string): AgentRecord | undefined {
 		const seat = this.seats.get(normalizeSeatName(name));
-		if (!seat?.activeAgentId) return undefined;
+		if (!seat?.activeAgentId) {return undefined;}
 		return this.getAgent(seat.activeAgentId);
 	}
 
 	findLastFinishedSeatAgent(name: string): AgentRecord | undefined {
 		const seat = this.seats.get(normalizeSeatName(name));
-		if (!seat?.lastFinishedAgentId) return undefined;
+		if (!seat?.lastFinishedAgentId) {return undefined;}
 		return this.getAgent(seat.lastFinishedAgentId);
 	}
 
 	findAgent(identifier: string): AgentRecord | undefined {
-		const seatMatch = this.findActiveSeatAgent(identifier) ?? this.findLastFinishedSeatAgent(identifier);
-		if (seatMatch) return seatMatch;
+		const seatMatch = this.findActiveSeatAgent(identifier)
+			?? this.findLastFinishedSeatAgent(identifier);
+		if (seatMatch) {return seatMatch;}
 		const exact = this.getAgent(identifier) ?? this.getAgentByThreadId(identifier);
-		if (exact) return exact;
+		if (exact) {return exact;}
 		const normalized = identifier.trim().toLowerCase();
 		for (const agent of this.agents.values()) {
-			if (agent.name.trim().toLowerCase() === normalized) return cloneAgent(agent);
+			if (agent.name.trim().toLowerCase() === normalized) {return cloneAgent(agent);}
 		}
 		return undefined;
 	}
@@ -146,26 +152,30 @@ export class DoeRegistryBase extends EventEmitter {
 		return batch ? { ...batch, agentIds: [...batch.agentIds] } : undefined;
 	}
 
-	listAgents(options: { includeCompleted?: boolean; limit?: number; state?: AgentLifecycleState } = {}): AgentRecord[] {
+	listAgents(
+		options: { includeCompleted?: boolean; limit?: number; state?: AgentLifecycleState } = {},
+	): AgentRecord[] {
 		const { includeCompleted = true, limit, state } = options;
 		let agents = [...this.agents.values()];
 		agents = agents.filter((agent) => {
-			if (state && agent.state !== state) return false;
-			if (!includeCompleted && TERMINAL_STATES.has(agent.state)) return false;
+			if (state && agent.state !== state) {return false;}
+			if (!includeCompleted && TERMINAL_STATES.has(agent.state)) {return false;}
 			return true;
 		});
 		agents.sort((a, b) => b.startedAt - a.startedAt);
-		if (typeof limit === "number") agents = agents.slice(0, limit);
+		if (typeof limit === "number") {agents = agents.slice(0, limit);}
 		return agents.map(cloneAgent);
 	}
 
 	listRecoverableAgents(): AgentRecord[] {
-		return this.listAgents({ includeCompleted: true }).filter((agent) => agent.threadId && isRecoverableState(agent.state));
+		return this.listAgents({ includeCompleted: true }).filter((agent) =>
+			agent.threadId && RECOVERABLE_STATES.has(agent.state)
+		);
 	}
 
 	listBatches(limit?: number): BatchRecord[] {
 		let batches = [...this.batches.values()].sort((a, b) => b.startedAt - a.startedAt);
-		if (typeof limit === "number") batches = batches.slice(0, limit);
+		if (typeof limit === "number") {batches = batches.slice(0, limit);}
 		return batches.map((batch) => ({ ...batch, agentIds: [...batch.agentIds] }));
 	}
 
@@ -173,7 +183,9 @@ export class DoeRegistryBase extends EventEmitter {
 		return [...this.seats.values()].sort(seatSort).map(cloneSeat);
 	}
 
-	listRosterAssignments(options: { includeAwaitingInput?: boolean; includeHistory?: boolean; limit?: number } = {}): RosterAssignmentRecord[] {
+	listRosterAssignments(
+		options: { includeAwaitingInput?: boolean; includeHistory?: boolean; limit?: number } = {},
+	): RosterAssignmentRecord[] {
 		const { includeAwaitingInput = true, includeHistory = false, limit } = options;
 		const entries: RosterAssignmentRecord[] = [];
 		for (const seat of this.listRosterSeats()) {
@@ -192,26 +204,35 @@ export class DoeRegistryBase extends EventEmitter {
 			}
 			if (includeHistory && seat.lastFinishedAgentId) {
 				const history = this.getAgent(seat.lastFinishedAgentId);
-				if (history) entries.push({ seat, agent: history, source: "history" });
+				if (history) {entries.push({ seat, agent: history, source: "history" });}
 			}
 		}
 		return typeof limit === "number" ? entries.slice(0, limit) : entries;
 	}
 
-	getRosterRoleSummaries(options: { includeAwaitingInput?: boolean; includeHistory?: boolean } = {}): RosterRoleSummary[] {
+	getRosterRoleSummaries(
+		options: { includeAwaitingInput?: boolean; includeHistory?: boolean } = {},
+	): RosterRoleSummary[] {
 		const counts = new Map<SeatRole, RosterRoleSummary>();
 		for (const role of SEAT_ROLES) {
 			counts.set(role, { role, label: SEAT_ROLE_LABELS[role], activeCount: 0, names: [] });
 		}
-		for (const entry of this.listRosterAssignments({
-			includeAwaitingInput: options.includeAwaitingInput ?? true,
-			includeHistory: options.includeHistory ?? false,
-		})) {
-			const summary = counts.get(entry.seat.role)!;
+		for (
+			const entry of this.listRosterAssignments({
+				includeAwaitingInput: options.includeAwaitingInput ?? true,
+				includeHistory: options.includeHistory ?? false,
+			})
+		) {
+			const summary = counts.get(entry.seat.role);
+			if (!summary) {
+				continue;
+			}
 			summary.activeCount += 1;
 			summary.names.push(entry.seat.name);
 		}
-		return [...SEAT_ROLES].map((role) => counts.get(role)!);
+		return [...SEAT_ROLES]
+			.map((role) => counts.get(role))
+			.filter((summary): summary is RosterRoleSummary => summary !== undefined);
 	}
 
 	finalizeSeat(
@@ -240,17 +261,21 @@ export class DoeRegistryBase extends EventEmitter {
 			reuseSummary: input.reuseSummary ?? agent.reuseSummary ?? null,
 			latestSnippet: input.note ? tailSnippet(input.note) : agent.latestSnippet,
 		};
-		this.releaseSeat(finalized, {
-			note: finalized.finishNote ?? null,
-			reuseSummary: finalized.reuseSummary ?? null,
-		});
-		const saved = this.upsertAgent(finalized);
-		return { seat: this.findSeat(seat.name)!, agent: saved };
-	}
+			this.releaseSeat(finalized, {
+				note: finalized.finishNote ?? null,
+				reuseSummary: finalized.reuseSummary ?? null,
+			});
+			const saved = this.upsertAgent(finalized);
+			return { seat: this.requireSeat(seat.name), agent: saved };
+		}
 
 	cancelAgent(
 		agentId: string,
-		input: { note?: string | null; interruptedTurnId?: string | null; reuseSummary?: string | null } = {},
+		input: {
+			note?: string | null;
+			interruptedTurnId?: string | null;
+			reuseSummary?: string | null;
+		} = {},
 	): AgentRecord {
 		const agent = this.agents.get(agentId);
 		if (!agent) {
@@ -287,7 +312,7 @@ export class DoeRegistryBase extends EventEmitter {
 
 	protected requireSeat(name: string): RosterSeatRecord {
 		const seat = this.seats.get(normalizeSeatName(name));
-		if (!seat) throw new Error(`Unknown IC seat "${name}".`);
+		if (!seat) {throw new Error(`Unknown IC seat "${name}".`);}
 		return cloneSeat(seat);
 	}
 
@@ -299,30 +324,43 @@ export class DoeRegistryBase extends EventEmitter {
 				throw new Error(`${seat.name} already has an occupied assignment.`);
 			}
 			if (agent.state === "completed") {
-				throw new Error(`${seat.name} is occupied by a completed assignment. Use codex_resume to continue that thread, or codex_finalize to release the seat before spawning fresh work.`);
+				throw new Error(
+					`${seat.name} is occupied by a completed assignment. Use codex_resume to continue that thread, or codex_finalize to release the seat before spawning fresh work.`,
+				);
 			}
 			if (agent.state === "awaiting_input") {
-				throw new Error(`${seat.name} is occupied by an assignment awaiting DOE input. Use codex_resume to continue that thread, or codex_finalize to release the seat before spawning fresh work.`);
+				throw new Error(
+					`${seat.name} is occupied by an assignment awaiting DOE input. Use codex_resume to continue that thread, or codex_finalize to release the seat before spawning fresh work.`,
+				);
 			}
 			if (agent.state === "working") {
-				throw new Error(`${seat.name} is occupied by active work. Use codex_resume to continue that thread, or wait/cancel before replacing it.`);
+				throw new Error(
+					`${seat.name} is occupied by active work. Use codex_resume to continue that thread, or wait/cancel before replacing it.`,
+				);
 			}
 			throw new Error(`${seat.name} already has an occupied assignment.`);
 		}
 		return seat;
 	}
 
-	protected allocateSeat(role: ICRole, model: string | null): RosterSeatRecord {
+	protected allocateSeat(role: ICRole | null, model: string | null): RosterSeatRecord {
+		if (!role) {
+			throw new Error("Seat assignment requires an explicit role.");
+		}
 		const named = this.listRosterSeats().find((seat) => seat.role === role && !seat.activeAgentId);
-		if (named) return named;
+		if (named) {return named;}
 		const contractor = this.listRosterSeats().find((seat) => seat.role === "contractor" && !seat.activeAgentId);
 		if (contractor) {
-			if (!model) throw new Error("Contractor assignments require an explicit model.");
+			if (!model) {
+				throw new Error("Contractor assignments require an explicit model.");
+			}
 			const next = { ...contractor, model };
 			this.seats.set(normalizeSeatName(next.name), next);
 			return cloneSeat(next);
 		}
-		if (!model) throw new Error("Contractor assignments require an explicit model.");
+		if (!model) {
+			throw new Error("Contractor assignments require an explicit model.");
+		}
 		const seat = defaultSeatRecord({
 			name: `contractor-${this.nextContractorNumber}`,
 			role: "contractor",
@@ -333,11 +371,14 @@ export class DoeRegistryBase extends EventEmitter {
 		return cloneSeat(seat);
 	}
 
-	protected releaseSeat(agent: AgentRecord, input: { note?: string | null; reuseSummary?: string | null } = {}) {
-		if (!agent.seatName) return;
+	protected releaseSeat(
+		agent: AgentRecord,
+		input: { note?: string | null; reuseSummary?: string | null } = {},
+	) {
+		if (!agent.seatName) {return;}
 		const key = normalizeSeatName(agent.seatName);
 		const seat = this.seats.get(key);
-		if (!seat) return;
+		if (!seat) {return;}
 		const nextSeat: RosterSeatRecord = {
 			...seat,
 			activeAgentId: seat.activeAgentId === agent.id ? null : seat.activeAgentId ?? null,
@@ -353,31 +394,35 @@ export class DoeRegistryBase extends EventEmitter {
 		if (previous?.seatName && previous.seatName !== next.seatName) {
 			const previousSeat = this.seats.get(normalizeSeatName(previous.seatName));
 			if (previousSeat?.activeAgentId === previous.id) {
-				this.seats.set(normalizeSeatName(previous.seatName), { ...previousSeat, activeAgentId: null });
+				this.seats.set(normalizeSeatName(previous.seatName), {
+					...previousSeat,
+					activeAgentId: null,
+				});
 			}
 		}
-		if (!next.seatName) return;
+		if (!next.seatName) {return;}
 		const key = normalizeSeatName(next.seatName);
 		const seat = this.seats.get(key);
-		if (!seat) return;
+		if (!seat) {return;}
 		const nextSeat = { ...seat };
 		next.name = seat.name;
 		next.seatRole = seat.role;
-		if (isAttachedState(next.state)) {
+		if (ATTACHED_STATES.has(next.state)) {
 			nextSeat.activeAgentId = next.id;
-		} else {
-			if (nextSeat.activeAgentId === next.id) nextSeat.activeAgentId = null;
-			nextSeat.lastFinishedAgentId = next.id;
-			nextSeat.lastThreadId = next.threadId ?? nextSeat.lastThreadId ?? null;
-			nextSeat.lastFinishNote = next.finishNote ?? nextSeat.lastFinishNote ?? null;
-			nextSeat.lastReuseSummary = next.reuseSummary ?? nextSeat.lastReuseSummary ?? null;
+			this.seats.set(key, nextSeat);
+			return;
 		}
+		if (nextSeat.activeAgentId === next.id) {nextSeat.activeAgentId = null;}
+		nextSeat.lastFinishedAgentId = next.id;
+		nextSeat.lastThreadId = next.threadId ?? nextSeat.lastThreadId ?? null;
+		nextSeat.lastFinishNote = next.finishNote ?? nextSeat.lastFinishNote ?? null;
+		nextSeat.lastReuseSummary = next.reuseSummary ?? nextSeat.lastReuseSummary ?? null;
 		this.seats.set(key, nextSeat);
 	}
 
 	protected updateAgent(agentId: string, updater: (agent: AgentRecord) => AgentRecord) {
 		const current = this.agents.get(agentId);
-		if (!current) return;
+		if (!current) {return;}
 		this.upsertAgent(updater(cloneAgent(current)));
 	}
 
@@ -393,23 +438,26 @@ export class DoeRegistryBase extends EventEmitter {
 	protected resolveAgent(agent: AgentRecord) {
 		const waiters = this.agentWaiters.get(agent.id) ?? [];
 		this.agentWaiters.delete(agent.id);
-		for (const waiter of waiters) waiter(cloneAgent(agent));
-		this.emit("event", { type: "agent-terminal", agent: cloneAgent(agent) } satisfies RegistryEvent);
+		for (const waiter of waiters) {waiter(cloneAgent(agent));}
+		this.emit("event",
+			{ type: "agent-terminal", agent: cloneAgent(agent) } satisfies RegistryEvent);
 	}
 
 	protected checkBatchCompletion(batchId?: string) {
-		if (!batchId) return;
+		if (!batchId) {return;}
 		const batch = this.batches.get(batchId);
-		if (!batch) return;
-		if (batch.completedAt) return;
-		const agents = batch.agentIds.map((id) => this.agents.get(id)).filter(Boolean) as AgentRecord[];
-		if (agents.length === 0) return;
-		if (!agents.every((agent) => TERMINAL_STATES.has(agent.state))) return;
+		if (!batch) {return;}
+		if (batch.completedAt) {return;}
+		const agents = batch.agentIds
+			.map((id) => this.agents.get(id))
+			.filter((agent): agent is AgentRecord => agent !== undefined);
+		if (agents.length === 0) {return;}
+		if (!agents.every((agent) => TERMINAL_STATES.has(agent.state))) {return;}
 		const nextBatch = { ...batch, completedAt: Date.now() };
 		this.batches.set(batch.id, nextBatch);
 		const waiters = this.batchWaiters.get(batch.id) ?? [];
 		this.batchWaiters.delete(batch.id);
-		for (const waiter of waiters) waiter(agents.map(cloneAgent));
+		for (const waiter of waiters) {waiter(agents.map(cloneAgent));}
 		this.emit("event", {
 			type: "batch-completed",
 			batch: { ...nextBatch, agentIds: [...nextBatch.agentIds] },
