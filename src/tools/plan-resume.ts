@@ -75,6 +75,8 @@ interface PlanResumePendingInput {
 	sessionSlug: string;
 }
 
+type RevisionStatus = "drafting" | "needs_revision";
+
 const PLAN_RESUME_TOOL_META = {
 	name: "plan_resume",
 	label: "Plan Resume",
@@ -268,6 +270,36 @@ async function handlePlanResumePendingReview(input: PlanResumePendingInput) {
 	});
 }
 
+function matchRevisionActivePlan(state: ActivePlanState) {
+	return (current: ActivePlanState) =>
+		current.agentId === state.agentId
+		&& current.planSlug === state.planSlug
+		&& current.planFilePath === state.planFilePath;
+}
+
+function setPlanResumeRevisionStatus(input: {
+	deps: PlanResumeToolDeps;
+	matchActivePlan: (current: ActivePlanState) => boolean;
+	status: RevisionStatus;
+	reviewFeedback: string;
+}) {
+	const { deps, matchActivePlan, status, reviewFeedback } = input;
+	deps.setPlanState(
+		(current) => ({
+			...current,
+			activePlan: current.activePlan
+					&& matchActivePlan(current.activePlan)
+				? {
+					...current.activePlan,
+					status,
+					reviewFeedback,
+				}
+				: current.activePlan,
+		}),
+		{ flush: true },
+	);
+}
+
 async function handlePlanResumeRevision(input: PlanResumeRevisionInput) {
 	const { deps, params, state, sessionSlug } = input;
 	const agent = resolvePlanResumeAgent(deps.registry, state);
@@ -288,6 +320,8 @@ async function handlePlanResumeRevision(input: PlanResumeRevisionInput) {
 		planFilePath: state.planFilePath,
 		sharedKnowledgebasePath: shared.sharedKnowledgebasePath,
 	});
+	const previousFeedback = state.reviewFeedback;
+	const matchActivePlan = matchRevisionActivePlan(state);
 
 	seedPlanResumeAgent({
 		deps,
@@ -295,30 +329,31 @@ async function handlePlanResumeRevision(input: PlanResumeRevisionInput) {
 		templateDefaults,
 		prompt,
 	});
-	const outcome = await runPlanResumeTurn({
+	setPlanResumeRevisionStatus({
 		deps,
-		agent,
-		prompt,
-		templateDefaults,
-		allowWrite: true,
+		matchActivePlan,
+		status: "drafting",
+		reviewFeedback: previousFeedback,
 	});
+	let outcome: PlanResumeTurnOutcome;
+	try {
+		outcome = await runPlanResumeTurn({
+			deps,
+			agent,
+			prompt,
+			templateDefaults,
+			allowWrite: true,
+		});
+	} catch (error) {
+		setPlanResumeRevisionStatus({
+			deps,
+			matchActivePlan,
+			status: "needs_revision",
+			reviewFeedback: previousFeedback,
+		});
+		throw error;
+	}
 	const nextAgent = deps.registry.findAgent(agent.id) ?? agent;
-	deps.setPlanState(
-		(current) => ({
-			...current,
-			activePlan: current.activePlan
-					&& current.activePlan.agentId === state.agentId
-					&& current.activePlan.planSlug === state.planSlug
-					&& current.activePlan.planFilePath === state.planFilePath
-				? {
-					...current.activePlan,
-					status: "drafting",
-					reviewFeedback: null,
-				}
-				: current.activePlan,
-		}),
-		{ flush: true },
-	);
 	const happened = outcome.action === "steer_queued"
 		? "Revision steer queued on the active planning turn. Review will run automatically after the draft completes."
 		: "Revision turn started and is running in the background. Review will run automatically after the draft completes.";

@@ -495,7 +495,7 @@ function attachWorkingPlanAgent(registry: DoeRegistry, turnId = "turn-active") {
 
 function createNeedsRevisionPlanState(
 	planFilePath: string,
-	reviewFeedback = "# Plan Feedback\n\nAdd rollout and testing.",
+	reviewFeedback = DEFAULT_REVIEW_FEEDBACK,
 ): DoePlanState {
 	return {
 		version: 5,
@@ -514,6 +514,8 @@ function createNeedsRevisionPlanState(
 	};
 }
 
+const DEFAULT_REVIEW_FEEDBACK = "# Plan Feedback\n\nAdd rollout and testing.";
+
 async function createNeedsRevisionHarness(input: {
 	templatesDir: string;
 	attachAgent: (registry: DoeRegistry) => void;
@@ -529,8 +531,12 @@ async function createNeedsRevisionHarness(input: {
 	return harness;
 }
 
-function assertRevisionDraftingState(harness: Awaited<ReturnType<typeof createPlanHarness>>) {
+function assertRevisionDraftingState(
+	harness: Awaited<ReturnType<typeof createPlanHarness>>,
+	reviewFeedback = DEFAULT_REVIEW_FEEDBACK,
+) {
 	assert.equal(harness.planState.read().activePlan?.status, "drafting");
+	assert.equal(harness.planState.read().activePlan?.reviewFeedback, reviewFeedback);
 	assert.equal(harness.planState.read().pendingReview, null);
 	assert.equal(harness.reviewController.calls.length, 0);
 }

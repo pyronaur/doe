@@ -4,7 +4,6 @@ import {
 	attachPlanReviewOutcomeHandler,
 	ensurePlanReviewPending,
 	type PlanWorkflowToolDeps,
-	setPlanReadyForReview,
 	setPlanReadyWithPendingReview,
 	setPlanReviewRetryable,
 } from "../tools/plan-workflow.ts";
@@ -137,21 +136,24 @@ export class DoePlanReviewCoordinator {
 	private async prepareReviewJob(
 		activePlan: DoeActivePlanState,
 		input: { reviewId?: string },
-	): Promise<{ reviewId: string; wait: Promise<DoePlanReviewResult> }> {
-		const matchActivePlan = buildActivePlanMatcher(activePlan);
+	): Promise<{
+		reviewId: string;
+		wait: Promise<DoePlanReviewResult>;
+		started?: Promise<void>;
+		isAlive?: () => boolean;
+	}> {
 		readPlanFile(activePlan.planFilePath);
 		const reviewJob = this.deps.startReviewPlan({
 			reviewId: input.reviewId,
 			planFilePath: activePlan.planFilePath,
 			cwd: this.resolveReviewCwd(activePlan),
 		});
-		try {
-			await ensurePlanReviewPending(reviewJob);
-		} catch (error) {
-			setPlanReadyForReview(this.deps.setPlanState, matchActivePlan);
-			throw error;
-		}
-		return { reviewId: reviewJob.reviewId, wait: reviewJob.wait };
+		return {
+			reviewId: reviewJob.reviewId,
+			wait: reviewJob.wait,
+			started: reviewJob.started,
+			isAlive: reviewJob.isAlive,
+		};
 	}
 
 	private persistPendingReview(
@@ -184,16 +186,24 @@ export class DoePlanReviewCoordinator {
 		}
 		try {
 			const job = await this.prepareReviewJob(activePlan, {});
+			const matchActivePlan = buildActivePlanMatcher(activePlan);
+			const matchPendingReview = buildPendingReviewMatcher({
+				reviewId: job.reviewId,
+				planSlug: activePlan.planSlug,
+				planFilePath: activePlan.planFilePath,
+			});
 			this.persistPendingReview(activePlan, job.reviewId, Date.now());
+			try {
+				await ensurePlanReviewPending(job);
+			} catch (error) {
+				setPlanReviewRetryable(this.deps.setPlanState, matchActivePlan, matchPendingReview);
+				throw error;
+			}
 			this.watchReviewOutcome({
 				reviewId: job.reviewId,
 				wait: job.wait,
-				matchActive: buildActivePlanMatcher(activePlan),
-				matchPending: buildPendingReviewMatcher({
-					reviewId: job.reviewId,
-					planSlug: activePlan.planSlug,
-					planFilePath: activePlan.planFilePath,
-				}),
+				matchActive: matchActivePlan,
+				matchPending: matchPendingReview,
 			});
 		} catch (error) {
 			console.error(
@@ -229,18 +239,31 @@ export class DoePlanReviewCoordinator {
 			);
 			return;
 		}
-
-		const reviewJob = this.deps.startReviewPlan({
-			reviewId: pendingReview.reviewId,
-			planFilePath: pendingReview.planFilePath,
-			cwd: this.resolveReviewCwd(activePlan),
-		});
 		const matchActivePlan = buildActivePlanMatcher(activePlan);
 		const matchPendingReview = buildPendingReviewMatcher({
 			reviewId: pendingReview.reviewId,
 			planSlug: pendingReview.planSlug,
 			planFilePath: pendingReview.planFilePath,
 		});
+
+		let reviewJob:
+			| ReturnType<PlanReviewCoordinatorDeps["startReviewPlan"]>
+			| null = null;
+		try {
+			reviewJob = this.deps.startReviewPlan({
+				reviewId: pendingReview.reviewId,
+				planFilePath: pendingReview.planFilePath,
+				cwd: this.resolveReviewCwd(activePlan),
+			});
+		} catch (error) {
+			setPlanReviewRetryable(this.deps.setPlanState, matchActivePlan, matchPendingReview);
+			console.error(
+				`[doe] failed to restore plan review ${pendingReview.reviewId}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+			return;
+		}
 		this.watchReviewOutcome({
 			reviewId: reviewJob.reviewId,
 			wait: reviewJob.wait,
