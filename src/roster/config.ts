@@ -24,7 +24,7 @@ export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {
  */
 export const IC_CONFIG = [
 	{
-		name: "Tony",
+		name: "Pattern",
 		role: "researcher",
 		defaults: {
 			model: "gpt-5.4",
@@ -33,7 +33,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Bruce",
+		name: "Khriss",
 		role: "researcher",
 		defaults: {
 			model: "gpt-5.4",
@@ -42,7 +42,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Strange",
+		name: "Jarvis",
 		role: "senior",
 		defaults: {
 			model: "gpt-5.3-codex",
@@ -51,7 +51,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Scott",
+		name: "Stark",
 		role: "senior",
 		defaults: {
 			model: "gpt-5.3-codex",
@@ -60,7 +60,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Peter",
+		name: "Shadow",
 		role: "mid",
 		defaults: {
 			model: "gpt-5.4",
@@ -69,7 +69,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Sam",
+		name: "Echo",
 		role: "mid",
 		defaults: {
 			model: "gpt-5.4",
@@ -78,7 +78,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Jane",
+		name: "Dash",
 		role: "junior",
 		defaults: {
 			model: "gpt-5.4-mini",
@@ -87,7 +87,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Pepper",
+		name: "Flash",
 		role: "junior",
 		defaults: {
 			model: "gpt-5.4-mini",
@@ -96,7 +96,7 @@ export const IC_CONFIG = [
 		},
 	},
 	{
-		name: "Hope",
+		name: "Spark",
 		role: "intern",
 		defaults: {
 			model: "gpt-5.3-codex-spark",
