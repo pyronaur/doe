@@ -4,7 +4,6 @@ import { Type } from "@sinclair/typebox";
 import type { CodexAppServerClient } from "../codex/app-server-client.ts";
 import {
 	type ApprovalPolicy,
-	extractLastCompletedAgentMessage,
 	type ReasoningEffort,
 	type SandboxMode,
 	truncateForDisplay,
@@ -13,7 +12,6 @@ import { readOptionalModelId, validateModelId } from "../codex/model-selection.t
 import { formatUsageCompact } from "../context-usage.ts";
 import { getSharedKnowledgebaseContext } from "../plan/flow.ts";
 import type { DoeRegistry } from "../roster/registry.ts";
-import { resolveAgentFinalOutput } from "./agent-final-output.ts";
 import { cancelAgentRun } from "./cancel-agent-run.ts";
 import { formatContextStatusLines } from "./context-status.ts";
 import { readToolProgressSummary, startToolProgressUpdates } from "./progress-updates.ts";
@@ -80,6 +78,18 @@ interface ResumeProgressInput {
 	ctx: ResumeWorkflowInput["ctx"];
 }
 
+type ResumeTurnOutcome =
+	| {
+		action: "steer_queued";
+		threadId: string;
+		turnId: string | null;
+	}
+	| {
+		action: "turn_started";
+		threadId: string;
+		turnId: string | null;
+	};
+
 function buildPrompt(
 	params: any,
 	templatesDir: string,
@@ -107,7 +117,7 @@ const RESUME_TOOL_META = {
 		"Does not accept tasks[], name, cwd, or batchName.",
 		"Specify model and reasoning separately: use model like gpt-5.4 and effort like low|medium|high|xhigh. Do not pass combined strings like gpt-5.4-high.",
 		"Sandbox follows DOE role policy. `allowWrite` only controls auto-approval of file-change requests; use `sandbox=\"danger-full-access\"` to opt a mid-level IC into full access.",
-		"Waits for the worker to finish before returning and returns the worker's full final answer in content. Use that returned content directly as the worker result.",
+		"Returns immediately after queueing steer or starting a turn. Use codex_list or codex_inspect to monitor progress and codex_resume again for follow-ups.",
 	],
 	parameters: Type.Object({
 		...AgentLookupFields,
@@ -121,20 +131,34 @@ function isReasoningEffort(value: string | null | undefined): value is Reasoning
 	return value === "low" || value === "medium" || value === "high" || value === "xhigh";
 }
 
-function buildResumeResult(agent: any, text: string) {
+function buildResumeResult(agent: any, outcome: ResumeTurnOutcome) {
+	const nextStep = outcome.action === "steer_queued"
+		? "Steer was queued on the active turn. Use codex_list or codex_inspect to monitor progress."
+		: "A new turn was started. Use codex_list or codex_inspect to monitor progress.";
 	return {
 		content: [{
 			type: "text",
 			text: [
 				`ic: ${agent.name}`,
+				`agent_id: ${agent.id}`,
+				`thread_id: ${outcome.threadId}`,
+				`turn_id: ${outcome.turnId ?? "unknown"}`,
+				`action: ${outcome.action}`,
 				`state: ${agent.state}`,
 				`context: ${formatUsageCompact(agent.usage)}`,
 				...formatContextStatusLines(agent.compaction),
 				"",
-				text,
+				"next_step:",
+				nextStep,
 			].join("\n"),
 		}],
-		details: { agent },
+		details: {
+			agent,
+			action: outcome.action,
+			threadId: outcome.threadId,
+			turnId: outcome.turnId,
+			state: agent.state,
+		},
 	};
 }
 
@@ -187,7 +211,7 @@ function seedResumeAgent(input: ResumeAgentSeedInput) {
 	});
 }
 
-async function runResumeTurn(input: ResumeTurnInput) {
+async function runResumeTurn(input: ResumeTurnInput): Promise<ResumeTurnOutcome> {
 	const {
 		deps,
 		agent,
@@ -217,7 +241,11 @@ async function runResumeTurn(input: ResumeTurnInput) {
 		},
 	});
 	if (wasSteered) {
-		return;
+		return {
+			action: "steer_queued",
+			threadId: agent.threadId,
+			turnId: agent.activeTurnId ?? null,
+		};
 	}
 
 	await resumeThreadAndStartTurn({
@@ -234,15 +262,12 @@ async function runResumeTurn(input: ResumeTurnInput) {
 		allowWrite,
 		sandbox,
 	});
-}
-
-async function resolveResumeFinalText(deps: ResumeToolDeps, agent: any): Promise<string> {
-	const text = resolveAgentFinalOutput(agent, null);
-	if (text || !agent.threadId) {
-		return text ?? "Completed";
-	}
-	const threadResponse = await deps.client.readThread(agent.threadId, true);
-	return extractLastCompletedAgentMessage(threadResponse.thread) ?? "Completed";
+	const updatedAgent = deps.registry.getAgent(agent.id) ?? null;
+	return {
+		action: "turn_started",
+		threadId: agent.threadId,
+		turnId: updatedAgent?.activeTurnId ?? null,
+	};
 }
 
 function buildResumeExecutionContext(
@@ -303,7 +328,7 @@ function startResumeProgressUpdates(input: ResumeProgressInput) {
 }
 
 async function executeResumeWorkflow(input: ResumeWorkflowInput) {
-	const { deps, params, signal, onUpdate, ctx } = input;
+	const { deps, params, onUpdate, ctx } = input;
 	const agent = resolveResumeTarget(deps.registry, params);
 	if (!agent?.threadId) {
 		throw new Error(
@@ -334,7 +359,7 @@ async function executeResumeWorkflow(input: ResumeWorkflowInput) {
 			effort: runtime.effort,
 			allowWrite: runtime.allowWrite,
 		});
-		await runResumeTurn({
+		const outcome = await runResumeTurn({
 			deps,
 			agent,
 			prompt: runtime.prompt,
@@ -346,9 +371,9 @@ async function executeResumeWorkflow(input: ResumeWorkflowInput) {
 			sandbox: runtime.sandbox,
 			requestedAllowWrite: runtime.requestedAllowWrite,
 		});
-		const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
-		const text = await resolveResumeFinalText(deps, finalAgent);
-		return buildResumeResult(finalAgent, text);
+		const updatedAgent = deps.registry.getAgent(agent.id) ?? deps.registry.findAgent(agent.id)
+			?? agent;
+		return buildResumeResult(updatedAgent, outcome);
 	} catch (error) {
 		if (error instanceof Error && error.message === "Cancelled") {
 			await cancelAgentRun({
