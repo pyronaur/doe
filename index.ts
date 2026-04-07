@@ -12,6 +12,7 @@ import {
 	serializePlanState,
 	type DoePlanState,
 } from "./src/plan/session-state.js";
+import { runPlanReviewCli } from "./src/plan/review.js";
 import { estimateCurrentTurnIndex, shouldInjectSessionSlugReminder } from "./src/plan/reminder.js";
 import { DoeRegistry } from "./src/roster/registry.js";
 import type { PersistedRegistrySnapshot, RegistryEvent } from "./src/roster/types.js";
@@ -128,6 +129,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 			client,
 			registry,
 			templatesDir: TEMPLATES_DIR,
+			reviewPlan: runPlanReviewCli,
 			getSessionSlug: () => pi.getSessionName() ?? null,
 			getPlanState: () => clonePlanState(getRuntime().planState),
 			setPlanState: updatePlanState,
@@ -136,6 +138,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 			client,
 			registry,
 			templatesDir: TEMPLATES_DIR,
+			reviewPlan: runPlanReviewCli,
 			getSessionSlug: () => pi.getSessionName() ?? null,
 			getPlanState: () => clonePlanState(getRuntime().planState),
 			setPlanState: updatePlanState,

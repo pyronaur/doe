@@ -6,11 +6,11 @@ import { truncateForDisplay } from "../codex/client.js";
 import { formatCompactionSignal, formatUsageCompact } from "../context-usage.js";
 import {
 	buildPlanResumePrompt,
-	formatPlanReviewCommand,
 	getSharedKnowledgebaseContext,
 	readPlanFile,
 	readPlanTemplateDefaults,
 } from "../plan/flow.js";
+import type { DoePlanReviewResult } from "../plan/review.js";
 import type { DoePlanState } from "../plan/session-state.js";
 import type { DoeRegistry } from "../roster/registry.js";
 
@@ -18,6 +18,7 @@ interface PlanResumeToolDeps {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
 	templatesDir: string;
+	reviewPlan: (input: { planFilePath: string; cwd: string; signal?: AbortSignal }) => Promise<DoePlanReviewResult>;
 	getSessionSlug: () => string | null;
 	getPlanState: () => DoePlanState;
 	setPlanState: (updater: (state: DoePlanState) => DoePlanState, options?: { flush?: boolean }) => DoePlanState;
@@ -30,6 +31,11 @@ function resolveAgentFinalOutput(agent: any): string {
 	return agent?.latestFinalOutput ?? lastAgentMessage ?? agent?.latestSnippet ?? "Completed";
 }
 
+function formatPlanReviewSummary(review: DoePlanReviewResult): string[] {
+	if (!review.feedback) return [];
+	return ["", "# CTO Review Feedback", review.feedback];
+}
+
 export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDeps) {
 	pi.registerTool({
 		name: "plan_resume",
@@ -38,10 +44,10 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 		promptSnippet: "Continue the current plan on the same IC seat and plan file.",
 		promptGuidelines: [
 			"Use this only when an active planning workflow already exists.",
-			"Pass review feedback and optional DoE commentary for the same active plan.",
+			"DOE automatically includes the captured review feedback for the active plan.",
+			"Pass only the Director commentary needed for the revision.",
 		],
 		parameters: Type.Object({
-			feedback: Type.String(),
 			commentary: Type.Optional(Type.String()),
 		}),
 		renderCall(_args, theme) {
@@ -60,6 +66,12 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 			if (!state.activePlan) {
 				throw new Error("No active planning workflow exists. Use plan_start first.");
 			}
+			if (state.activePlan.sessionSlug && state.activePlan.sessionSlug !== sessionSlug) {
+				throw new Error(`The active planning workflow is bound to session ${state.activePlan.sessionSlug}. Call session_set for that session before plan_resume.`);
+			}
+			if (state.activePlan.status !== "needs_revision" || !state.activePlan.reviewFeedback) {
+				throw new Error("The active planning workflow does not have captured review feedback to apply yet.");
+			}
 
 			const agent = (state.activePlan.agentId && deps.registry.findAgent(state.activePlan.agentId))
 				?? (state.activePlan.threadId && deps.registry.findAgent(state.activePlan.threadId))
@@ -71,7 +83,7 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 			const shared = getSharedKnowledgebaseContext(process.cwd(), sessionSlug);
 			const templateDefaults = readPlanTemplateDefaults(deps.templatesDir);
 			const prompt = buildPlanResumePrompt({
-				feedback: params.feedback,
+				reviewFeedback: state.activePlan.reviewFeedback,
 				commentary: params.commentary,
 				planFilePath: state.activePlan.planFilePath,
 				sharedKnowledgebasePath: shared.sharedKnowledgebasePath,
@@ -127,7 +139,39 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 
 			const finalAgent = await deps.registry.waitForAgent(agent.id, signal);
 			readPlanFile(state.activePlan.planFilePath);
-			const nextStep = formatPlanReviewCommand(state.activePlan.planFilePath);
+			deps.setPlanState(
+				(current) => ({
+					...current,
+					activePlan: current.activePlan?.agentId === agent.id
+						? {
+								...current.activePlan,
+								status: "ready_for_review",
+								reviewFeedback: null,
+							}
+						: current.activePlan,
+				}),
+				{ flush: true },
+			);
+			const review = await deps.reviewPlan({
+				planFilePath: state.activePlan.planFilePath,
+				cwd: process.cwd(),
+				signal,
+			});
+			deps.setPlanState(
+				(current) => ({
+					...current,
+					activePlan: current.activePlan?.agentId === agent.id
+						? review.status === "approved"
+							? null
+							: {
+									...current.activePlan,
+									status: "needs_revision",
+									reviewFeedback: review.feedback,
+								}
+						: current.activePlan,
+				}),
+				{ flush: true },
+			);
 			const ic = state.activePlan.ic ?? agent.seatName ?? agent.name;
 
 			return {
@@ -136,11 +180,12 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 					text: [
 						`ic: ${ic}`,
 						`plan_slug: ${state.activePlan.planSlug}`,
-						`state: ${finalAgent.state}`,
+						`state: ${review.status}`,
 						`context: ${formatUsageCompact(finalAgent.usage)}`,
 						...(formatCompactionSignal(finalAgent.compaction) ? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`] : []),
 						`plan_file: ${state.activePlan.planFilePath}`,
-						`next_step: ${nextStep}`,
+						`review_status: ${review.status}`,
+						...formatPlanReviewSummary(review),
 						"",
 						resolveAgentFinalOutput(finalAgent),
 					].join("\n"),
@@ -148,9 +193,11 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 				details: {
 					agent: finalAgent,
 					ic,
+					sessionSlug: state.activePlan.sessionSlug ?? sessionSlug,
 					planSlug: state.activePlan.planSlug,
 					planFilePath: state.activePlan.planFilePath,
-					nextStep,
+					reviewStatus: review.status,
+					reviewFeedback: review.feedback,
 				},
 			};
 		},

@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DoeRegistry } from "../src/roster/registry.ts";
+import type { DoePlanReviewResult } from "../src/plan/review.ts";
 import type { AgentRecord } from "../src/roster/types.ts";
 import { createEmptyPlanState, type DoePlanState } from "../src/plan/session-state.ts";
 
@@ -172,11 +173,14 @@ async function createToolHarness(input: {
 	registry: DoeRegistry;
 	client: FakePlanClient;
 	templatesDir: string;
+	reviewResults?: DoePlanReviewResult[];
 	getPlanState: () => DoePlanState;
 	setPlanState: (updater: (state: DoePlanState) => DoePlanState) => DoePlanState;
 }) {
 	const { registerPlanResumeTool, registerPlanStartTool, registerPlanStopTool } = await loadPlanTools();
 	const tools = new Map<string, any>();
+	const reviewCalls: Array<{ planFilePath: string; cwd: string }> = [];
+	const reviewResults = [...(input.reviewResults ?? [{ status: "approved", feedback: null }])];
 	const pi = {
 		registerTool(tool: any) {
 			tools.set(tool.name, tool);
@@ -187,6 +191,10 @@ async function createToolHarness(input: {
 		client: input.client as any,
 		registry: input.registry,
 		templatesDir: input.templatesDir,
+		reviewPlan: async ({ planFilePath, cwd }) => {
+			reviewCalls.push({ planFilePath, cwd });
+			return reviewResults.shift() ?? { status: "approved", feedback: null };
+		},
 		getSessionSlug: () => "feature-x",
 		getPlanState: input.getPlanState,
 		setPlanState: (updater) => input.setPlanState(updater),
@@ -195,6 +203,10 @@ async function createToolHarness(input: {
 		client: input.client as any,
 		registry: input.registry,
 		templatesDir: input.templatesDir,
+		reviewPlan: async ({ planFilePath, cwd }) => {
+			reviewCalls.push({ planFilePath, cwd });
+			return reviewResults.shift() ?? { status: "approved", feedback: null };
+		},
 		getSessionSlug: () => "feature-x",
 		getPlanState: input.getPlanState,
 		setPlanState: (updater) => input.setPlanState(updater),
@@ -210,10 +222,11 @@ async function createToolHarness(input: {
 		start: tools.get("plan_start"),
 		resume: tools.get("plan_resume"),
 		stop: tools.get("plan_stop"),
+		reviewCalls,
 	};
 }
 
-test("plan_start requires an explicit IC, writes the plan file, and returns the manual annotate step", { concurrency: false }, async () => {
+test("plan_start requires an explicit IC, writes the plan file, and captures revision feedback automatically", { concurrency: false }, async () => {
 	const repoRoot = mkdtempSync(join(tmpdir(), "doe-plan-tools-"));
 	const templatesDir = join(repoRoot, "templates");
 	createPlanTemplate(templatesDir);
@@ -224,6 +237,7 @@ test("plan_start requires an explicit IC, writes the plan file, and returns the 
 		registry,
 		client,
 		templatesDir,
+		reviewResults: [{ status: "needs_revision", feedback: "# Plan Feedback\n\nAdd rollout guidance." }],
 		getPlanState: () => planState,
 		setPlanState: (updater) => {
 			planState = updater(planState);
@@ -241,17 +255,24 @@ test("plan_start requires an explicit IC, writes the plan file, and returns the 
 		}, undefined);
 
 		const planFilePath = planState.activePlan?.planFilePath ?? "";
+		assert.equal(planState.activePlan?.sessionSlug, "feature-x");
 		assert.equal(planState.activePlan?.ic, "Hope");
 		assert.match(planFilePath, /\/\.tmp\/feature-x\/plan-auth-refactor\.md$/);
 		assert.equal(planState.activePlan?.threadId, "thread-1");
+		assert.equal(planState.activePlan?.status, "needs_revision");
+		assert.equal(planState.activePlan?.reviewFeedback, "# Plan Feedback\n\nAdd rollout guidance.");
 		assert.ok(existsSync(planFilePath));
 		assert.match(readFileSync(planFilePath, "utf-8"), /Initial plan/);
 		assert.equal(client.threadCalls[0]?.model, "gpt-5.4-mini");
 		assert.equal((client.turnCalls as Array<{ threadId: string; prompt: string } | undefined>)[0] ? true : false, true);
+		assert.equal(tools.reviewCalls.length, 1);
+		assert.equal(tools.reviewCalls[0]?.planFilePath, planFilePath);
 		assert.match(result.content[0].text, /ic: Hope/);
-		assert.match(result.content[0].text, /next_step: !plannotator annotate /);
+		assert.match(result.content[0].text, /review_status: needs_revision/);
+		assert.match(result.content[0].text, /Add rollout guidance/);
 		assert.equal(result.details.ic, "Hope");
-		assert.equal(result.details.nextStep, `!plannotator annotate ${planFilePath}`);
+		assert.equal(result.details.reviewStatus, "needs_revision");
+		assert.equal(result.details.reviewFeedback, "# Plan Feedback\n\nAdd rollout guidance.");
 		assert.match(client.turnCalls[0]!.prompt, /Write the plan only to:/);
 		assert.equal(registry.findAgent(planState.activePlan?.agentId ?? "")?.model, "gpt-5.4-mini");
 		assert.equal(registry.findAgent(planState.activePlan?.agentId ?? "")?.effort, "high");
@@ -260,7 +281,7 @@ test("plan_start requires an explicit IC, writes the plan file, and returns the 
 	}
 });
 
-test("plan_resume reuses the same IC, thread, and plan file with explicit feedback", { concurrency: false }, async () => {
+test("plan_resume reuses the same IC, thread, and plan file with captured review feedback", { concurrency: false }, async () => {
 	const repoRoot = mkdtempSync(join(tmpdir(), "doe-plan-tools-"));
 	const templatesDir = join(repoRoot, "templates");
 	createPlanTemplate(templatesDir);
@@ -274,6 +295,10 @@ test("plan_resume reuses the same IC, thread, and plan file with explicit feedba
 		registry,
 		client,
 		templatesDir,
+		reviewResults: [
+			{ status: "needs_revision", feedback: "# Plan Feedback\n\nAdd rollout and testing." },
+			{ status: "approved", feedback: null },
+		],
 		getPlanState: () => planState,
 		setPlanState: (updater) => {
 			planState = updater(planState);
@@ -291,13 +316,11 @@ test("plan_resume reuses the same IC, thread, and plan file with explicit feedba
 		}, undefined);
 
 		const result = await tools.resume.execute("tool-2", {
-			feedback: "Add rollout and testing.",
 			commentary: "Keep scope tight.",
 		}, undefined);
 
-		const planFilePath = planState.activePlan?.planFilePath ?? "";
-		assert.equal(planState.activePlan?.ic, "Hope");
-		assert.equal(planState.activePlan?.threadId, "thread-1");
+		const planFilePath = join(repoRoot, ".tmp", "feature-x", "plan-auth-refactor.md");
+		assert.equal(planState.activePlan, null);
 		assert.match(planFilePath, /\/\.tmp\/feature-x\/plan-auth-refactor\.md$/);
 		assert.equal(client.resumeCalls.length, 1);
 		assert.equal(client.resumeCalls[0]?.model, "gpt-5.4-mini");
@@ -306,9 +329,11 @@ test("plan_resume reuses the same IC, thread, and plan file with explicit feedba
 		assert.match(client.turnCalls[1]!.prompt, /Keep scope tight\./);
 		assert.match(client.turnCalls[1]!.prompt, /Rewrite the plan only at:/);
 		assert.match(readFileSync(planFilePath, "utf-8"), /Updated plan/);
-		assert.match(result.content[0].text, /next_step: !plannotator annotate /);
+		assert.equal(tools.reviewCalls.length, 2);
+		assert.match(result.content[0].text, /review_status: approved/);
 		assert.equal(result.details.ic, "Hope");
-		assert.equal(result.details.nextStep, `!plannotator annotate ${planFilePath}`);
+		assert.equal(result.details.reviewStatus, "approved");
+		assert.equal(result.details.reviewFeedback, null);
 	} finally {
 		process.chdir(previousCwd);
 	}
@@ -329,14 +354,17 @@ test("plan_stop interrupts the active plan and clears the single active plan sta
 	);
 	const client = new FakePlanClient(registry, []);
 	let planState: DoePlanState = {
-		version: 3,
+		version: 4,
 		sessionSlugReminderSentAtTurn: null,
 		activePlan: {
+			sessionSlug: "feature-x",
 			planSlug: "auth-refactor",
 			planFilePath: "/tmp/plan-auth-refactor.md",
 			ic: "Hope",
 			agentId: "agent-1",
 			threadId: "thread-1",
+			status: "needs_revision",
+			reviewFeedback: "Tighten scope.",
 		},
 	};
 	const tools = await createToolHarness({
@@ -370,6 +398,7 @@ test("plan_start retry after failed launch does not require allowExisting and do
 		registry,
 		client: failingClient,
 		templatesDir,
+		reviewResults: [{ status: "approved", feedback: null }],
 		getPlanState: () => planState,
 		setPlanState: (updater) => {
 			planState = updater(planState);
@@ -398,6 +427,7 @@ test("plan_start retry after failed launch does not require allowExisting and do
 			registry,
 			client: retryClient,
 			templatesDir,
+			reviewResults: [{ status: "needs_revision", feedback: "# Plan Feedback\n\nRetry feedback." }],
 			getPlanState: () => planState,
 			setPlanState: (updater) => {
 				planState = updater(planState);
@@ -410,7 +440,7 @@ test("plan_start retry after failed launch does not require allowExisting and do
 			prompt: "Plan the auth rewrite.",
 		}, undefined);
 
-		assert.match(retry.content[0].text, /next_step: !plannotator annotate /);
+		assert.match(retry.content[0].text, /review_status: needs_revision/);
 		assert.equal(existsSync(planState.activePlan?.planFilePath ?? ""), true);
 	} finally {
 		process.chdir(previousCwd);

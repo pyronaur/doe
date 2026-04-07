@@ -98,10 +98,6 @@ export function readPlanFile(path: string): string {
 	return text;
 }
 
-export function formatPlanReviewCommand(planFilePath: string): string {
-	return `!plannotator annotate ${planFilePath}`;
-}
-
 export function renderPlanPrompt(input: {
 	templatesDir: string;
 	task: string;
@@ -137,7 +133,7 @@ export function formatPlanReuseError(result: PreparedPlanFile): string {
 }
 
 export function buildPlanResumePrompt(input: {
-	feedback: string;
+	reviewFeedback: string;
 	commentary?: string;
 	planFilePath: string;
 	sharedKnowledgebasePath: string;
@@ -150,7 +146,7 @@ export function buildPlanResumePrompt(input: {
 		"Do not choose a different output path.",
 		"",
 		"# CTO Review Feedback",
-		input.feedback.trim(),
+		input.reviewFeedback.trim(),
 		...(commentary ? ["", "# DoE Commentary", commentary] : []),
 		"",
 		"Revise the plan accordingly and overwrite the same markdown file.",

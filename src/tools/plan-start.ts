@@ -9,7 +9,6 @@ import type { DoePlanState } from "../plan/session-state.js";
 import {
 	deletePlanFileIfEmpty,
 	ensurePlanFile,
-	formatPlanReviewCommand,
 	formatPlanReuseError,
 	getSharedKnowledgebaseContext,
 	preparePlanFile,
@@ -17,12 +16,14 @@ import {
 	readPlanTemplateDefaults,
 	renderPlanPrompt,
 } from "../plan/flow.js";
+import type { DoePlanReviewResult } from "../plan/review.js";
 import type { DoeRegistry } from "../roster/registry.js";
 
 interface PlanStartToolDeps {
 	client: CodexAppServerClient;
 	registry: DoeRegistry;
 	templatesDir: string;
+	reviewPlan: (input: { planFilePath: string; cwd: string; signal?: AbortSignal }) => Promise<DoePlanReviewResult>;
 	getSessionSlug: () => string | null;
 	getPlanState: () => DoePlanState;
 	setPlanState: (updater: (state: DoePlanState) => DoePlanState, options?: { flush?: boolean }) => DoePlanState;
@@ -35,6 +36,11 @@ function resolveAgentFinalOutput(agent: any): string {
 	return agent?.latestFinalOutput ?? lastAgentMessage ?? agent?.latestSnippet ?? "Completed";
 }
 
+function formatPlanReviewSummary(review: DoePlanReviewResult): string[] {
+	if (!review.feedback) return [];
+	return ["", "# CTO Review Feedback", review.feedback];
+}
+
 export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps) {
 	pi.registerTool({
 		name: "plan_start",
@@ -44,7 +50,7 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 		promptGuidelines: [
 			"Pass one concise planSlug for this plan.",
 			"Pass the planning IC explicitly.",
-			"Use this to draft a new plan; use plan_resume to revise the same plan file later.",
+			"Use this to draft a new plan; DOE will submit the plan file to Plannotator CLI automatically after the draft completes.",
 		],
 		parameters: Type.Object({
 			ic: Type.String(),
@@ -133,11 +139,14 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 				(current) => ({
 					...current,
 					activePlan: {
+						sessionSlug,
 						planSlug: planFile.planSlug,
 						planFilePath: planFile.planFilePath,
 						ic: seat.name,
 						agentId,
 						threadId: null,
+						status: "drafting",
+						reviewFeedback: null,
 					},
 				}),
 				{ flush: true },
@@ -201,7 +210,43 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 
 			const finalAgent = await deps.registry.waitForAgent(agentId, signal);
 			readPlanFile(planFile.planFilePath);
-			const nextStep = formatPlanReviewCommand(planFile.planFilePath);
+			deps.setPlanState(
+				(current) => ({
+					...current,
+					activePlan: current.activePlan?.agentId === agentId
+						? {
+								...current.activePlan,
+								status: "ready_for_review",
+								reviewFeedback: null,
+							}
+						: current.activePlan,
+				}),
+				{ flush: true },
+			);
+			onUpdate?.({
+				content: [{ type: "text", text: `Draft complete for ${planFile.planSlug}. Waiting for Plannotator review.` }],
+				details: { planSlug: planFile.planSlug, planFilePath: planFile.planFilePath },
+			});
+			const review = await deps.reviewPlan({
+				planFilePath: planFile.planFilePath,
+				cwd: repoRoot,
+				signal,
+			});
+			deps.setPlanState(
+				(current) => ({
+					...current,
+					activePlan: current.activePlan?.agentId === agentId
+						? review.status === "approved"
+							? null
+							: {
+									...current.activePlan,
+									status: "needs_revision",
+									reviewFeedback: review.feedback,
+								}
+						: current.activePlan,
+				}),
+				{ flush: true },
+			);
 
 			return {
 				content: [{
@@ -209,11 +254,12 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 					text: [
 						`ic: ${seat.name}`,
 						`plan_slug: ${planFile.planSlug}`,
-						`state: ${finalAgent.state}`,
+						`state: ${review.status}`,
 						`context: ${formatUsageCompact(finalAgent.usage)}`,
 						...(formatCompactionSignal(finalAgent.compaction) ? [`context_status: ${formatCompactionSignal(finalAgent.compaction)}`] : []),
 						`plan_file: ${planFile.planFilePath}`,
-						`next_step: ${nextStep}`,
+						`review_status: ${review.status}`,
+						...formatPlanReviewSummary(review),
 						"",
 						resolveAgentFinalOutput(finalAgent),
 					].join("\n"),
@@ -221,9 +267,11 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 				details: {
 					agent: finalAgent,
 					ic: seat.name,
+					sessionSlug,
 					planSlug: planFile.planSlug,
 					planFilePath: planFile.planFilePath,
-					nextStep,
+					reviewStatus: review.status,
+					reviewFeedback: review.feedback,
 					sharedKnowledgebasePath: shared.sharedKnowledgebasePath,
 				},
 			};

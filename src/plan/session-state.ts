@@ -1,12 +1,17 @@
 export const DOE_PLAN_STATE_TYPE = "doe-plan-state";
-export const DOE_PLAN_STATE_VERSION = 3;
+export const DOE_PLAN_STATE_VERSION = 4;
+
+export type DoePlanWorkflowStatus = "drafting" | "ready_for_review" | "needs_revision";
 
 export interface DoeActivePlanState {
+	sessionSlug: string | null;
 	planSlug: string;
 	planFilePath: string;
 	ic: string | null;
 	agentId: string | null;
 	threadId: string | null;
+	status: DoePlanWorkflowStatus;
+	reviewFeedback: string | null;
 }
 
 export interface DoePlanState {
@@ -29,18 +34,26 @@ function asString(value: unknown): string | null {
 	return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function asPlanWorkflowStatus(value: unknown): DoePlanWorkflowStatus | null {
+	return value === "drafting" || value === "ready_for_review" || value === "needs_revision" ? value : null;
+}
+
 function normalizeActivePlanState(value: unknown): DoeActivePlanState | null {
 	if (!value || typeof value !== "object") return null;
 	const input = value as Record<string, unknown>;
 	const planSlug = asString(input.planSlug);
 	const planFilePath = asString(input.planFilePath);
 	if (!planSlug || !planFilePath) return null;
+	const reviewFeedback = asString(input.reviewFeedback);
 	return {
+		sessionSlug: asString(input.sessionSlug),
 		planSlug,
 		planFilePath,
 		ic: asString(input.ic),
 		agentId: asString(input.agentId),
 		threadId: asString(input.threadId),
+		status: asPlanWorkflowStatus(input.status) ?? (reviewFeedback ? "needs_revision" : "drafting"),
+		reviewFeedback,
 	};
 }
 
