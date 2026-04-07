@@ -5,7 +5,7 @@ export const SEAT_ROLES = [...IC_ROLES, "contractor"] as const satisfies readonl
 
 export const SEAT_ROLE_LABELS: Record<SeatRole, string> = {
 	researcher: "Researchers",
-	senior: "Senior Engineers",
+	senior: "Senior Developers",
 	mid: "Mid-level Engineers",
 	junior: "Junior Engineers",
 	intern: "Interns",
@@ -45,6 +45,15 @@ export const IC_CONFIG = [
 		},
 	},
 	{
+		name: "Scott",
+		role: "senior",
+		defaults: {
+			model: "gpt-5.3-codex",
+			effort: "high",
+			allowWrite: true,
+		},
+	},
+	{
 		name: "Peter",
 		role: "mid",
 		defaults: {
@@ -55,15 +64,6 @@ export const IC_CONFIG = [
 	},
 	{
 		name: "Sam",
-		role: "mid",
-		defaults: {
-			model: "gpt-5.4",
-			effort: "medium",
-			allowWrite: true,
-		},
-	},
-	{
-		name: "Scott",
 		role: "mid",
 		defaults: {
 			model: "gpt-5.4",
