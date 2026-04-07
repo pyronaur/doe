@@ -31,6 +31,7 @@ Match the IC's skill level to the task. Getting it wrong costs time and money.
 - Do not assign multiple ICs to the same question
 - Do not silently reopen finished work. Use `reuseFinished=true` only when DOE explicitly wants the last finished seat context.
 - If a seat is occupied and non-running, finish it intentionally with `codex_finalize` when the seat should be released.
+- Finalize a seat only when you are confident it won't be needed again — the work is fully wrapped with no chance of follow-up, the bucket is full and you need the space, or the session is winding down. Finalize is an intentional release, not a cleanup step after every completed task.
 
 ## IC Write Access
 - Research ICs start read-only
