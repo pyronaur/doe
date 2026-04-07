@@ -2,6 +2,7 @@ import type { CodexAppServerClient } from "../codex/app-server-client.ts";
 import type { DoePlanReviewResult } from "../plan/review.ts";
 import type { DoePlanState } from "../plan/session-state.ts";
 import type { DoeRegistry } from "../roster/registry.ts";
+import { resolveAgentFinalOutput } from "./agent-final-output.ts";
 
 type ActivePlanState = NonNullable<DoePlanState["activePlan"]>;
 type PendingReviewState = NonNullable<DoePlanState["pendingReview"]>;
@@ -55,6 +56,51 @@ export function formatPlanRevisionNextStep(review: DoePlanReviewResult): string[
 		"<next_step>",
 		"Review feedback is stored automatically. Use plan_resume with Director commentary only.",
 		"</next_step>",
+	];
+}
+
+function resolveAgentResponseTimestamp(agent: any): number | null {
+	if (!agent) {
+		return null;
+	}
+	const latestAgentMessage = [...(agent.messages ?? [])]
+		.reverse()
+		.find((message: any) =>
+			message?.role === "agent"
+			&& (typeof message?.completedAt === "number" || typeof message?.createdAt === "number")
+		);
+	if (typeof latestAgentMessage?.completedAt === "number") {
+		return latestAgentMessage.completedAt;
+	}
+	if (typeof latestAgentMessage?.createdAt === "number") {
+		return latestAgentMessage.createdAt;
+	}
+	if (typeof agent.completedAt === "number") {
+		return agent.completedAt;
+	}
+	return null;
+}
+
+function formatAgentResponseTimestamp(agent: any): string {
+	const timestamp = resolveAgentResponseTimestamp(agent);
+	if (timestamp === null) {
+		return "unknown";
+	}
+	return new Date(timestamp).toISOString();
+}
+
+export function formatPlanProgressSummary(input: {
+	happened: string;
+	agent: any | null;
+}): string[] {
+	const lastAgentMessage = resolveAgentFinalOutput(input.agent, "unknown");
+	return [
+		`happened: ${input.happened}`,
+		`agent_response_at: ${formatAgentResponseTimestamp(input.agent)}`,
+		"",
+		"<last_agent_message>",
+		lastAgentMessage,
+		"</last_agent_message>",
 	];
 }
 

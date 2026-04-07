@@ -16,6 +16,7 @@ import { resolveAgentFinalOutput } from "./agent-final-output.ts";
 import { formatContextStatusLines } from "./context-status.ts";
 import {
 	attachPlanReviewOutcomeHandler,
+	formatPlanProgressSummary,
 	type PlanWorkflowToolDeps,
 	setPlanPendingReview,
 	setPlanReadyForReview,
@@ -124,10 +125,13 @@ function buildPlanResumeResult(input: PlanResumePendingResultInput) {
 		"review_status: pending",
 		`review_id: ${reviewId}`,
 		"",
-		note,
+		...formatPlanProgressSummary({
+			happened: note,
+			agent: agent ?? null,
+		}),
 	];
 	if (includeFinalOutput && agent) {
-		lines.push("", resolveAgentFinalOutput(agent));
+		lines.push("", resolveAgentFinalOutput(agent, "unknown"));
 	}
 	return {
 		content: [{
@@ -143,6 +147,9 @@ function buildPlanResumeResult(input: PlanResumePendingResultInput) {
 			reviewStatus: "pending",
 			reviewFeedback: null,
 			reviewId,
+			happened: note,
+			agentResponseAt: agent?.completedAt ?? null,
+			lastAgentMessage: resolveAgentFinalOutput(agent, "unknown"),
 		},
 	};
 }

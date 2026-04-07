@@ -18,6 +18,7 @@ import { resolveAgentFinalOutput } from "./agent-final-output.ts";
 import { formatContextStatusLines } from "./context-status.ts";
 import {
 	attachPlanReviewOutcomeHandler,
+	formatPlanProgressSummary,
 	type PlanWorkflowToolDeps,
 	setPlanPendingReview,
 	setPlanReadyForReview,
@@ -290,9 +291,11 @@ function buildPlanStartResult(input: PlanStartResultInput) {
 				"review_status: pending",
 				`review_id: ${reviewId}`,
 				"",
-				"Review is running asynchronously. Use plan_resume to check or continue this workflow.",
-				"",
-				resolveAgentFinalOutput(finalAgent),
+				...formatPlanProgressSummary({
+					happened:
+						"Draft completed and review was started asynchronously. Use plan_resume to check progress.",
+					agent: finalAgent,
+				}),
 			].join("\n"),
 		}],
 		details: {
@@ -304,6 +307,9 @@ function buildPlanStartResult(input: PlanStartResultInput) {
 			reviewStatus: "pending",
 			reviewFeedback: null,
 			reviewId,
+			happened: "Draft completed and review started in background.",
+			agentResponseAt: finalAgent?.completedAt ?? null,
+			lastAgentMessage: resolveAgentFinalOutput(finalAgent, "unknown"),
 			sharedKnowledgebasePath: context.shared.sharedKnowledgebasePath,
 		},
 	};
