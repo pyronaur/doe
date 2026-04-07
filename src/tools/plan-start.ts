@@ -227,11 +227,17 @@ export function registerPlanStartTool(pi: ExtensionAPI, deps: PlanStartToolDeps)
 				content: [{ type: "text", text: `Draft complete for ${planFile.planSlug}. Waiting for Plannotator review.` }],
 				details: { planSlug: planFile.planSlug, planFilePath: planFile.planFilePath },
 			});
-			const review = await deps.reviewPlan({
-				planFilePath: planFile.planFilePath,
-				cwd: repoRoot,
-				signal,
-			});
+			let review: DoePlanReviewResult;
+			try {
+				review = await deps.reviewPlan({
+					planFilePath: planFile.planFilePath,
+					cwd: repoRoot,
+					signal,
+				});
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				throw new Error(`${reason}\nUse plan_resume to retry review for the same plan workflow.`);
+			}
 			deps.setPlanState(
 				(current) => ({
 					...current,

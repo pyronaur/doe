@@ -173,7 +173,7 @@ async function createToolHarness(input: {
 	registry: DoeRegistry;
 	client: FakePlanClient;
 	templatesDir: string;
-	reviewResults?: DoePlanReviewResult[];
+	reviewResults?: Array<DoePlanReviewResult | Error>;
 	getPlanState: () => DoePlanState;
 	setPlanState: (updater: (state: DoePlanState) => DoePlanState) => DoePlanState;
 }) {
@@ -193,7 +193,9 @@ async function createToolHarness(input: {
 		templatesDir: input.templatesDir,
 		reviewPlan: async ({ planFilePath, cwd }) => {
 			reviewCalls.push({ planFilePath, cwd });
-			return reviewResults.shift() ?? { status: "approved", feedback: null };
+			const next = reviewResults.shift() ?? { status: "approved", feedback: null };
+			if (next instanceof Error) throw next;
+			return next;
 		},
 		getSessionSlug: () => "feature-x",
 		getPlanState: input.getPlanState,
@@ -205,7 +207,9 @@ async function createToolHarness(input: {
 		templatesDir: input.templatesDir,
 		reviewPlan: async ({ planFilePath, cwd }) => {
 			reviewCalls.push({ planFilePath, cwd });
-			return reviewResults.shift() ?? { status: "approved", feedback: null };
+			const next = reviewResults.shift() ?? { status: "approved", feedback: null };
+			if (next instanceof Error) throw next;
+			return next;
 		},
 		getSessionSlug: () => "feature-x",
 		getPlanState: input.getPlanState,
@@ -442,6 +446,114 @@ test("plan_start retry after failed launch does not require allowExisting and do
 
 		assert.match(retry.content[0].text, /review_status: needs_revision/);
 		assert.equal(existsSync(planState.activePlan?.planFilePath ?? ""), true);
+	} finally {
+		process.chdir(previousCwd);
+	}
+});
+
+test("plan_start review failure leaves the plan ready for review and plan_resume retries the same review loop", { concurrency: false }, async () => {
+	const repoRoot = mkdtempSync(join(tmpdir(), "doe-plan-tools-"));
+	const templatesDir = join(repoRoot, "templates");
+	createPlanTemplate(templatesDir);
+	const registry = new DoeRegistry();
+	const client = new FakePlanClient(registry, ["# Draft\n\nInitial plan.\n"]);
+	let planState = createEmptyPlanState();
+	const tools = await createToolHarness({
+		registry,
+		client,
+		templatesDir,
+		reviewResults: [
+			new Error("Plannotator CLI review failed: browser startup failed"),
+			{ status: "needs_revision", feedback: "# Plan Feedback\n\nRetry worked." },
+		],
+		getPlanState: () => planState,
+		setPlanState: (updater) => {
+			planState = updater(planState);
+			return planState;
+		},
+	});
+	const previousCwd = process.cwd();
+	process.chdir(repoRoot);
+
+	try {
+		await assert.rejects(
+			tools.start.execute("tool-6", {
+				ic: "Hope",
+				planSlug: "auth refactor",
+				prompt: "Plan the auth rewrite.",
+			}, undefined),
+			/retry review for the same plan workflow/,
+		);
+
+		assert.equal(planState.activePlan?.status, "ready_for_review");
+		assert.equal(planState.activePlan?.reviewFeedback, null);
+		assert.equal(client.turnCalls.length, 1);
+
+		const result = await tools.resume.execute("tool-7", {}, undefined);
+
+		assert.equal(client.turnCalls.length, 1);
+		assert.equal(tools.reviewCalls.length, 2);
+		assert.equal(planState.activePlan?.status, "needs_revision");
+		assert.equal(planState.activePlan?.reviewFeedback, "# Plan Feedback\n\nRetry worked.");
+		assert.match(result.content[0].text, /Review retried without revising the plan\./);
+		assert.match(result.content[0].text, /review_status: needs_revision/);
+	} finally {
+		process.chdir(previousCwd);
+	}
+});
+
+test("plan_resume review failure after a revision stays retryable without another rewrite", { concurrency: false }, async () => {
+	const repoRoot = mkdtempSync(join(tmpdir(), "doe-plan-tools-"));
+	const templatesDir = join(repoRoot, "templates");
+	createPlanTemplate(templatesDir);
+	const registry = new DoeRegistry();
+	const client = new FakePlanClient(registry, [
+		"# Draft\n\nInitial plan.\n",
+		"# Revised\n\nUpdated plan.\n",
+	]);
+	let planState = createEmptyPlanState();
+	const tools = await createToolHarness({
+		registry,
+		client,
+		templatesDir,
+		reviewResults: [
+			{ status: "needs_revision", feedback: "# Plan Feedback\n\nAdd rollout and testing." },
+			new Error("Plannotator review was cancelled before a decision was captured."),
+			{ status: "approved", feedback: null },
+		],
+		getPlanState: () => planState,
+		setPlanState: (updater) => {
+			planState = updater(planState);
+			return planState;
+		},
+	});
+	const previousCwd = process.cwd();
+	process.chdir(repoRoot);
+
+	try {
+		await tools.start.execute("tool-8", {
+			ic: "Hope",
+			planSlug: "auth refactor",
+			prompt: "Plan the auth rewrite.",
+		}, undefined);
+
+		await assert.rejects(
+			tools.resume.execute("tool-9", {
+				commentary: "Keep scope tight.",
+			}, undefined),
+			/retry review for the same plan workflow/,
+		);
+
+		assert.equal(planState.activePlan?.status, "ready_for_review");
+		assert.equal(planState.activePlan?.reviewFeedback, null);
+		assert.equal(client.turnCalls.length, 2);
+
+		const retry = await tools.resume.execute("tool-10", {}, undefined);
+
+		assert.equal(client.turnCalls.length, 2);
+		assert.equal(planState.activePlan, null);
+		assert.match(retry.content[0].text, /Review retried without revising the plan\./);
+		assert.match(retry.content[0].text, /review_status: approved/);
 	} finally {
 		process.chdir(previousCwd);
 	}

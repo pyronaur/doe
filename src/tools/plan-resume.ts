@@ -36,6 +36,27 @@ function formatPlanReviewSummary(review: DoePlanReviewResult): string[] {
 	return ["", "# CTO Review Feedback", review.feedback];
 }
 
+async function retryPlanReview(input: {
+	reviewPlan: PlanResumeToolDeps["reviewPlan"];
+	state: DoePlanState["activePlan"];
+	cwd: string;
+	signal?: AbortSignal;
+}) {
+	if (!input.state) {
+		throw new Error("No active planning workflow exists. Use plan_start first.");
+	}
+	try {
+		return await input.reviewPlan({
+			planFilePath: input.state.planFilePath,
+			cwd: input.cwd,
+			signal: input.signal,
+		});
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		throw new Error(`${reason}\nUse plan_resume again to retry review for the same plan workflow.`);
+	}
+}
+
 export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDeps) {
 	pi.registerTool({
 		name: "plan_resume",
@@ -69,8 +90,56 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 			if (state.activePlan.sessionSlug && state.activePlan.sessionSlug !== sessionSlug) {
 				throw new Error(`The active planning workflow is bound to session ${state.activePlan.sessionSlug}. Call session_set for that session before plan_resume.`);
 			}
+			if (state.activePlan.status === "ready_for_review" && !state.activePlan.reviewFeedback) {
+				const review = await retryPlanReview({
+					reviewPlan: deps.reviewPlan,
+					state: state.activePlan,
+					cwd: process.cwd(),
+					signal,
+				});
+				deps.setPlanState(
+					(current) => ({
+						...current,
+						activePlan: current.activePlan?.planFilePath === state.activePlan?.planFilePath
+							? review.status === "approved"
+								? null
+								: {
+										...current.activePlan,
+										status: "needs_revision",
+										reviewFeedback: review.feedback,
+									}
+							: current.activePlan,
+					}),
+					{ flush: true },
+				);
+				const ic = state.activePlan.ic ?? "unknown";
+				return {
+					content: [{
+						type: "text",
+						text: [
+							`ic: ${ic}`,
+							`plan_slug: ${state.activePlan.planSlug}`,
+							`state: ${review.status}`,
+							`plan_file: ${state.activePlan.planFilePath}`,
+							`review_status: ${review.status}`,
+							...formatPlanReviewSummary(review),
+							"",
+							"Review retried without revising the plan.",
+						].join("\n"),
+					}],
+					details: {
+						agent: state.activePlan.agentId ? deps.registry.findAgent(state.activePlan.agentId) ?? null : null,
+						ic,
+						sessionSlug: state.activePlan.sessionSlug ?? sessionSlug,
+						planSlug: state.activePlan.planSlug,
+						planFilePath: state.activePlan.planFilePath,
+						reviewStatus: review.status,
+						reviewFeedback: review.feedback,
+					},
+				};
+			}
 			if (state.activePlan.status !== "needs_revision" || !state.activePlan.reviewFeedback) {
-				throw new Error("The active planning workflow does not have captured review feedback to apply yet.");
+				throw new Error("The active planning workflow does not have captured review feedback to apply yet. If review is still pending, call plan_resume again without commentary to retry review.");
 			}
 
 			const agent = (state.activePlan.agentId && deps.registry.findAgent(state.activePlan.agentId))
@@ -152,8 +221,9 @@ export function registerPlanResumeTool(pi: ExtensionAPI, deps: PlanResumeToolDep
 				}),
 				{ flush: true },
 			);
-			const review = await deps.reviewPlan({
-				planFilePath: state.activePlan.planFilePath,
+			const review = await retryPlanReview({
+				reviewPlan: deps.reviewPlan,
+				state: state.activePlan,
 				cwd: process.cwd(),
 				signal,
 			});
