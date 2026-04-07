@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
+import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 
 export const READ_TOOL_NAME = "read";
 export const NON_IMAGE_READ_BLOCK_REASON = "CTO approval required for non-image reads.";
@@ -29,6 +30,13 @@ export interface ReadGateDecision {
 	reason: string;
 }
 
+export interface ReadGateToolResultDecision {
+	toolResult: AgentToolResult;
+	isError?: boolean;
+}
+
+export type ReadGateResult = ReadGateDecision | ReadGateToolResultDecision | null;
+
 interface ResolvePathOptions {
 	homeDir?: string;
 }
@@ -39,7 +47,34 @@ interface EvaluateReadGateOptions extends ClassifyReadPathOptions {
 	cwd: string;
 	hasUI: boolean;
 	input: ReadGateInput;
-	confirm?: (title: string, message: string) => Promise<boolean>;
+	select?: (title: string, options: string[]) => Promise<string | undefined>;
+	promptInput?: (title: string, placeholder?: string) => Promise<string | undefined>;
+}
+
+const APPROVAL_OPTIONS = ["Yes", "No", "No, with reason..."] as const;
+
+function buildNonImageReadApprovalTitle(input: ReadGateInput, classification: ReadPathClassification): string {
+	return ["CTO Approval Required", buildNonImageReadApprovalMessage(input, classification)].join("\n\n");
+}
+
+function normalizeDenialReason(reason: string | undefined): string {
+	const trimmed = reason?.trim();
+	return trimmed ? trimmed : NON_IMAGE_READ_BLOCK_REASON;
+}
+
+function buildDeniedReadToolResult(reason: string): AgentToolResult {
+	return {
+		content: [
+			{
+				type: "text",
+				text: [
+					"Non-image read denied by CTO.",
+					`Reason: ${reason}`,
+					"Continue without this read. Choose another route. If clarification is needed, delegate to an IC instead of retrying this gated read.",
+				].join("\n"),
+			},
+		],
+	};
 }
 
 function normalizeUnicodeSpaces(value: string): string {
@@ -193,20 +228,29 @@ export function buildNonImageReadApprovalMessage(
 	return lines.join("\n");
 }
 
-export async function evaluateReadGate(options: EvaluateReadGateOptions): Promise<ReadGateDecision | null> {
+export async function evaluateReadGate(options: EvaluateReadGateOptions): Promise<ReadGateResult> {
 	const classification = await classifyReadPath(options.cwd, options.input.path, options);
 	if (classification.kind !== "non-image") return null;
-	if (!options.hasUI || !options.confirm) {
+	if (!options.hasUI || !options.select) {
 		return { block: true, reason: NON_IMAGE_READ_NO_UI_REASON };
 	}
 
 	try {
-		const approved = await options.confirm(
-			"CTO Approval Required",
-			buildNonImageReadApprovalMessage(options.input, classification),
+		const choice = await options.select(buildNonImageReadApprovalTitle(options.input, classification), [...APPROVAL_OPTIONS]);
+		if (choice === "Yes") return null;
+		if (choice !== "No, with reason...") {
+			return { block: true, reason: NON_IMAGE_READ_BLOCK_REASON };
+		}
+		if (!options.promptInput) {
+			return { block: true, reason: NON_IMAGE_READ_NO_UI_REASON };
+		}
+		const reason = normalizeDenialReason(
+			await options.promptInput("Reason for denying this read", "Optional reason"),
 		);
-		if (approved) return null;
-		return { block: true, reason: NON_IMAGE_READ_BLOCK_REASON };
+		return {
+			toolResult: buildDeniedReadToolResult(reason),
+			isError: false,
+		};
 	} catch {
 		return { block: true, reason: NON_IMAGE_READ_NO_UI_REASON };
 	}

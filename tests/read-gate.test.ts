@@ -100,32 +100,40 @@ test("ensureReadToolActive adds read without duplicating it", () => {
 test("evaluateReadGate allows image reads and unknown reads without prompting", async () => {
 	await withTempDir(async (dir) => {
 		writeBytes(join(dir, "screen.png"), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-		let confirmCalls = 0;
-		const confirm = async () => {
-			confirmCalls += 1;
-			return true;
+		let selectCalls = 0;
+		let inputCalls = 0;
+		const select = async () => {
+			selectCalls += 1;
+			return "Yes";
+		};
+		const promptInput = async () => {
+			inputCalls += 1;
+			return "unused";
 		};
 
 		const imageResult = await evaluateReadGate({
 			cwd: dir,
 			hasUI: true,
 			input: { path: "screen.png" },
-			confirm,
+			select,
+			promptInput,
 		});
 		const unknownResult = await evaluateReadGate({
 			cwd: dir,
 			hasUI: true,
 			input: { path: "missing.txt" },
-			confirm,
+			select,
+			promptInput,
 		});
 
 		assert.equal(imageResult, null);
 		assert.equal(unknownResult, null);
-		assert.equal(confirmCalls, 0);
+		assert.equal(selectCalls, 0);
+		assert.equal(inputCalls, 0);
 	});
 });
 
-test("evaluateReadGate requires approval for non-image reads and blocks on denial", async () => {
+test("evaluateReadGate blocks non-image reads on plain No", async () => {
 	await withTempDir(async (dir) => {
 		writeFileSync(join(dir, "notes.txt"), "hello");
 		const prompts: string[] = [];
@@ -133,21 +141,24 @@ test("evaluateReadGate requires approval for non-image reads and blocks on denia
 			cwd: dir,
 			hasUI: true,
 			input: { path: "notes.txt", offset: 3, limit: 5 },
-			confirm: async (title, message) => {
-				prompts.push(title, message);
-				return false;
+			select: async (title, options) => {
+				prompts.push(title, options.join(" | "));
+				return "No";
 			},
 		});
 
 		assert.deepEqual(result, { block: true, reason: NON_IMAGE_READ_BLOCK_REASON });
-		assert.equal(prompts[0], "CTO Approval Required");
 		assert.equal(
-			prompts[1],
-			buildNonImageReadApprovalMessage(
-				{ path: "notes.txt", offset: 3, limit: 5 },
-				{ kind: "non-image", resolvedPath: join(dir, "notes.txt"), mimeType: null },
-			),
+			prompts[0],
+			[
+				"CTO Approval Required",
+				buildNonImageReadApprovalMessage(
+					{ path: "notes.txt", offset: 3, limit: 5 },
+					{ kind: "non-image", resolvedPath: join(dir, "notes.txt"), mimeType: null },
+				),
+			].join("\n\n"),
 		);
+		assert.equal(prompts[1], "Yes | No | No, with reason...");
 	});
 });
 
@@ -170,8 +181,69 @@ test("evaluateReadGate allows approved non-image reads", async () => {
 			cwd: dir,
 			hasUI: true,
 			input: { path: "notes.txt" },
-			confirm: async () => true,
+			select: async () => "Yes",
 		});
 		assert.equal(result, null);
+	});
+});
+
+test("evaluateReadGate returns a nonfatal denied result when the user provides a reason", async () => {
+	await withTempDir(async (dir) => {
+		writeFileSync(join(dir, "notes.txt"), "hello");
+		const result = await evaluateReadGate({
+			cwd: dir,
+			hasUI: true,
+			input: { path: "notes.txt" },
+			select: async () => "No, with reason...",
+			promptInput: async () => "Need the IC to summarize this instead.",
+		});
+
+		assert.deepEqual(result, {
+			toolResult: {
+				content: [
+					{
+						type: "text",
+						text: [
+							"Non-image read denied by CTO.",
+							"Reason: Need the IC to summarize this instead.",
+							"Continue without this read. Choose another route. If clarification is needed, delegate to an IC instead of retrying this gated read.",
+						].join("\n"),
+					},
+				],
+			},
+			isError: false,
+		});
+	});
+});
+
+test("evaluateReadGate falls back to the default reason when a reason is blank or cancelled", async () => {
+	await withTempDir(async (dir) => {
+		writeFileSync(join(dir, "notes.txt"), "hello");
+
+		for (const reply of ["", "   ", undefined]) {
+			const result = await evaluateReadGate({
+				cwd: dir,
+				hasUI: true,
+				input: { path: "notes.txt" },
+				select: async () => "No, with reason...",
+				promptInput: async () => reply,
+			});
+
+			assert.deepEqual(result, {
+				toolResult: {
+					content: [
+						{
+							type: "text",
+							text: [
+								"Non-image read denied by CTO.",
+								`Reason: ${NON_IMAGE_READ_BLOCK_REASON}`,
+								"Continue without this read. Choose another route. If clarification is needed, delegate to an IC instead of retrying this gated read.",
+							].join("\n"),
+						},
+					],
+				},
+				isError: false,
+			});
+		}
 	});
 });

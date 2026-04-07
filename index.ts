@@ -402,7 +402,8 @@ export default function doeExtension(pi: ExtensionAPI) {
 			cwd: ctx.cwd,
 			hasUI: ctx.hasUI,
 			input: event.input,
-			confirm: ctx.hasUI ? (title, message) => ctx.ui.confirm(title, message) : undefined,
+			select: ctx.hasUI ? (title, options) => ctx.ui.select(title, options) : undefined,
+			promptInput: ctx.hasUI ? (title, placeholder) => ctx.ui.input(title, placeholder) : undefined,
 		});
 	});
 
