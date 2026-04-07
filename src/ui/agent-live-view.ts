@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { extractThreadTranscript, summarizeErrorText, truncateForDisplay } from "../codex/client.js";
+import { extractThreadTranscript, truncateForDisplay } from "../codex/client.js";
 import { formatUsageBreakdown } from "../context-usage.js";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
 import type { DoeRegistry } from "../roster/registry.js";
@@ -177,7 +177,7 @@ class AgentLiveViewComponent {
 			this.registry.hydrateAgentMessages(agent.id, messages);
 			this.hydrationError = null;
 		} catch (error) {
-			this.hydrationError = summarizeErrorText(error);
+			this.hydrationError = error instanceof Error ? error.message : String(error);
 		} finally {
 			this.hydratingAgentId = null;
 			this.requestRender();

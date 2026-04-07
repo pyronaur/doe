@@ -1,6 +1,5 @@
 import { IC_CONFIG, SEAT_ROLES } from "./config.js";
 import type { AgentCompactionState } from "../context-usage.js";
-import { summarizeErrorText } from "../error-text.js";
 import type {
 	AgentLifecycleState,
 	AgentMessageRecord,
@@ -15,8 +14,17 @@ const ATTACHED_STATES = new Set<AgentLifecycleState>(["working", "awaiting_input
 const RECOVERABLE_STATES = new Set<AgentLifecycleState>(["working", "awaiting_input"]);
 const CONTRACTOR_NAME = /^contractor-(\d+)$/i;
 
-export function normalizeErrorText(text: unknown): string {
-	return summarizeErrorText(text);
+export function normalizeErrorText(text: string): string {
+	const trimmed = text.trim();
+	if (!trimmed) return text;
+	try {
+		const parsed = JSON.parse(trimmed);
+		const message = parsed?.error?.message;
+		if (typeof message === "string" && message.trim()) {
+			return message.trim();
+		}
+	} catch {}
+	return text;
 }
 
 export function normalizeSeatName(name: string): string {

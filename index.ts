@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { isToolCallEventType, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { CodexAppServerClient } from "./src/codex/app-server-client.js";
 import { validateModelId } from "./src/codex/model-selection.js";
-import { summarizeErrorText, type CodexClientEvent } from "./src/codex/client.js";
+import type { CodexClientEvent } from "./src/codex/client.js";
 import {
 	DOE_PLAN_STATE_TYPE,
 	clonePlanState,
@@ -283,7 +283,7 @@ export default function doeExtension(pi: ExtensionAPI) {
 					await activeRuntime.client.resumeThread({ threadId: agent.threadId!, cwd: agent.cwd, model, allowWrite: agent.allowWrite ?? false });
 					activeRuntime.registry.markThreadAttached(agent.id, { threadId: agent.threadId!, recovered: true });
 				} catch (error) {
-					activeRuntime.registry.markError(agent.threadId!, `Failed to rehydrate thread: ${summarizeErrorText(error)}`);
+					activeRuntime.registry.markError(agent.threadId!, `Failed to rehydrate thread: ${error instanceof Error ? error.message : String(error)}`);
 				}
 			}
 		}

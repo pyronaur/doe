@@ -4,7 +4,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Container, Text } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { CodexAppServerClient } from "../codex/app-server-client.js";
-import { summarizeErrorText, truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
+import { truncateForDisplay, type ApprovalPolicy, type ReasoningEffort } from "../codex/client.js";
 import { readOptionalModelId, validateModelId } from "../codex/model-selection.js";
 import { getSharedKnowledgebaseContext, injectSharedKnowledgebaseContext, type SharedKnowledgebaseContext } from "../plan/flow.js";
 import { IC_ROLES } from "../roster/config.js";
@@ -277,7 +277,7 @@ async function executeSpawnLike(
 				deps.registry.markTurnStarted(thread.thread.id, turn.turn.id);
 				deps.registry.appendUserMessage(agentId, turn.turn.id, prompt);
 			} catch (error) {
-				deps.registry.markAgentError(agentId, summarizeErrorText(error));
+				deps.registry.markAgentError(agentId, error instanceof Error ? error.message : String(error));
 				throw error;
 			}
 		}

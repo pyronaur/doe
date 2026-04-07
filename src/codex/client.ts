@@ -1,5 +1,4 @@
 import type { CurrentContextUsage, ThreadTokenUsage } from "../context-usage.js";
-import { summarizeErrorText } from "../error-text.js";
 
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type ApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
@@ -339,5 +338,3 @@ export function truncateForDisplay(text: string | null | undefined, max = 220): 
 	if (compact.length <= max) return compact;
 	return `${compact.slice(0, max - 1)}…`;
 }
-
-export { summarizeErrorText };
