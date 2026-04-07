@@ -55,3 +55,40 @@ test("CodexAppServerClient normalizes thread token usage updates to current cont
 		usage: { tokensUsed: 204000, tokenLimit: 258000 },
 	});
 });
+
+test("CodexAppServerClient starts worker threads with full access by default", async () => {
+	const client = new CodexAppServerClient();
+	(client as any).ensureStarted = async () => {};
+	const calls: Array<{ method: string; params: any }> = [];
+	(client as any).request = async (method: string, params: any) => {
+		calls.push({ method, params });
+		return { thread: { id: "thread-1" } };
+	};
+
+	await client.startThread({
+		model: "gpt-5.4",
+		cwd: "/tmp",
+		approvalPolicy: "never",
+	});
+
+	assert.equal(calls[0]?.method, "thread/start");
+	assert.equal(calls[0]?.params.sandbox, "danger-full-access");
+});
+
+test("CodexAppServerClient resumes worker threads with full access by default", async () => {
+	const client = new CodexAppServerClient();
+	(client as any).ensureStarted = async () => {};
+	const calls: Array<{ method: string; params: any }> = [];
+	(client as any).request = async (method: string, params: any) => {
+		calls.push({ method, params });
+		return { thread: { id: "thread-1" } };
+	};
+
+	await client.resumeThread({
+		threadId: "thread-1",
+		cwd: "/tmp",
+	});
+
+	assert.equal(calls[0]?.method, "thread/resume");
+	assert.equal(calls[0]?.params.sandbox, "danger-full-access");
+});

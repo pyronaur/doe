@@ -156,7 +156,7 @@ export class CodexAppServerClient extends EventEmitter {
 
 	async startThread(options: ThreadStartOptions): Promise<any> {
 		await this.ensureStarted();
-		const allowWrite = options.allowWrite ?? false;
+		const allowWrite = options.allowWrite ?? true;
 		const result = await this.request("thread/start", {
 			model: options.model,
 			cwd: options.cwd,
@@ -177,7 +177,7 @@ export class CodexAppServerClient extends EventEmitter {
 
 	async resumeThread(options: { threadId: string; model?: string; cwd?: string; approvalPolicy?: string; allowWrite?: boolean }): Promise<any> {
 		await this.ensureStarted();
-		const allowWrite = options.allowWrite ?? this.threadWriteAccess.get(options.threadId) ?? false;
+		const allowWrite = options.allowWrite ?? this.threadWriteAccess.get(options.threadId) ?? true;
 		const result = await this.request("thread/resume", {
 			threadId: options.threadId,
 			model: options.model ?? null,
