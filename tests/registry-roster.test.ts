@@ -1,5 +1,5 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import { test } from "./test-runner.ts";
 import { DoeRegistry } from "../src/roster/registry.ts";
 import type { AgentRecord, PersistedRegistrySnapshot } from "../src/roster/types.ts";
 
@@ -75,9 +75,20 @@ test("contractor numbering is stable across serialize and restore", () => {
 	assert.equal(sam.name, "Sam");
 	assert.equal(contractor1.name, "contractor-1");
 
-	registry.upsertAgent(createAgent({ id: "agent-1", name: peter.name, seatName: peter.name, seatRole: peter.role }));
-	registry.upsertAgent(createAgent({ id: "agent-2", name: sam.name, seatName: sam.name, seatRole: sam.role }));
-	registry.upsertAgent(createAgent({ id: "agent-3", name: contractor1.name, seatName: contractor1.name, seatRole: contractor1.role }));
+	registry.upsertAgent(
+		createAgent({ id: "agent-1", name: peter.name, seatName: peter.name, seatRole: peter.role }),
+	);
+	registry.upsertAgent(
+		createAgent({ id: "agent-2", name: sam.name, seatName: sam.name, seatRole: sam.role }),
+	);
+	registry.upsertAgent(
+		createAgent({
+			id: "agent-3",
+			name: contractor1.name,
+			seatName: contractor1.name,
+			seatRole: contractor1.role,
+		}),
+	);
 
 	const restored = new DoeRegistry();
 	restored.restore(registry.serialize());
@@ -87,28 +98,29 @@ test("contractor numbering is stable across serialize and restore", () => {
 
 test("restore rejects contractor seats that are missing a persisted model", () => {
 	const registry = new DoeRegistry();
+	const invalidSnapshot = {
+		version: 6,
+		savedAt: Date.now(),
+		agents: [],
+		batches: [],
+		roster: {
+			seats: [
+				{
+					name: "contractor-1",
+					role: "contractor",
+					activeAgentId: null,
+					lastFinishedAgentId: null,
+					lastThreadId: null,
+					lastFinishNote: null,
+					lastReuseSummary: null,
+				},
+			],
+			nextContractorNumber: 2,
+		},
+	};
 	assert.throws(
 		() =>
-			registry.restore({
-				version: 6,
-				savedAt: Date.now(),
-				agents: [],
-				batches: [],
-				roster: {
-					seats: [
-						{
-							name: "contractor-1",
-							role: "contractor",
-							activeAgentId: null,
-							lastFinishedAgentId: null,
-							lastThreadId: null,
-							lastFinishNote: null,
-							lastReuseSummary: null,
-						} as any,
-					],
-					nextContractorNumber: 2,
-				},
-			}),
+			Reflect.apply(registry.restore, registry, [invalidSnapshot]),
 		/Stored contractor seat "contractor-1" is missing a model\./,
 	);
 });
@@ -142,7 +154,13 @@ test("legacy snapshot restore attaches exact-name completed agents to fixed seat
 		agents: [
 			createAgent({ id: "agent-1", name: "Tony", threadId: "thread-1", state: "working" }),
 			createAgent({ id: "agent-2", name: "random worker", threadId: "thread-2", state: "working" }),
-			createAgent({ id: "agent-3", name: "Bruce", threadId: "thread-3", state: "completed", completedAt: 10 }),
+			createAgent({
+				id: "agent-3",
+				name: "Bruce",
+				threadId: "thread-3",
+				state: "completed",
+				completedAt: 10,
+			}),
 		],
 		batches: [],
 	};
@@ -166,11 +184,14 @@ test("finalize releases completed seats but rejects active running work", () => 
 			seatName: seat.name,
 			seatRole: seat.role,
 		}),
-		);
+	);
 
 	assert.throws(() => registry.finalizeSeat("Hope"), /still working/);
 	registry.markCompleted("thread-1", "Need DOE input");
-	const finalized = registry.finalizeSeat("Hope", { note: "done", reuseSummary: "carry forward schema notes" });
+	const finalized = registry.finalizeSeat("Hope", {
+		note: "done",
+		reuseSummary: "carry forward schema notes",
+	});
 	assert.equal(finalized.seat.activeAgentId, null);
 	assert.equal(finalized.seat.lastFinishNote, "done");
 	assert.equal(finalized.agent.state, "finalized");

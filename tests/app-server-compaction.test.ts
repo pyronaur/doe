@@ -1,13 +1,43 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import { test } from "./test-runner.ts";
 import { CodexAppServerClient } from "../src/codex/app-server-client.ts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function setMethod(
+	target: CodexAppServerClient,
+	name: string,
+	handler: (...args: unknown[]) => unknown,
+): void {
+	Reflect.set(target, name, handler);
+}
+
+function callMethod(target: CodexAppServerClient, name: string, args: unknown[]): unknown {
+	const handler = Reflect.get(target, name);
+	if (typeof handler !== "function") {
+		throw new Error(`Expected ${name} to be a function.`);
+	}
+	return Reflect.apply(handler, target, args);
+}
+
+function readThreadWriteAccess(target: CodexAppServerClient, threadId: string): unknown {
+	const table = Reflect.get(target, "threadWriteAccess");
+	if (!(table instanceof Map)) {
+		throw new Error("Expected threadWriteAccess to be a map.");
+	}
+	return table.get(threadId);
+}
 
 function createMockClient() {
 	const client = new CodexAppServerClient();
-	const calls: Array<{ method: string; params: any }> = [];
-	(client as any).ensureStarted = async () => {};
-	(client as any).request = async (method: string, params: any) => {
-		calls.push({ method, params });
+	const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+	setMethod(client, "ensureStarted", async () => {});
+	setMethod(client, "request", async (method, params) => {
+		const methodName = typeof method === "string" ? method : "";
+		const requestParams = isRecord(params) ? params : {};
+		calls.push({ method: methodName, params: requestParams });
 		if (method === "thread/start" || method === "thread/resume") {
 			return { thread: { id: "thread-1" } };
 		}
@@ -15,28 +45,28 @@ function createMockClient() {
 			return { turn: { id: "turn-1" } };
 		}
 		return {};
-	};
+	});
 	return { client, calls };
 }
 
 test("CodexAppServerClient emits compaction lifecycle events", () => {
 	const client = new CodexAppServerClient();
-	const events: Array<any> = [];
+	const events: unknown[] = [];
 	client.on("event", (event) => events.push(event));
 
-	(client as any).handleNotification("item/started", {
+	callMethod(client, "handleNotification", ["item/started", {
 		threadId: "thread-1",
 		turnId: "turn-1",
 		item: { id: "item-1", type: "contextCompaction" },
-	});
-	(client as any).handleNotification("item/completed", {
+	}]);
+	callMethod(client, "handleNotification", ["item/completed", {
 		threadId: "thread-1",
 		turnId: "turn-1",
 		item: { id: "item-1", type: "contextCompaction" },
-	});
+	}]);
 
 	assert.deepEqual(
-		events.map((event) => event.type),
+		events.map((event) => (isRecord(event) ? event.type : undefined)),
 		["thread-compaction-started", "thread-compaction-completed"],
 	);
 	assert.deepEqual(events[0], {
@@ -49,21 +79,21 @@ test("CodexAppServerClient emits compaction lifecycle events", () => {
 		type: "thread-compaction-completed",
 		threadId: "thread-1",
 		turnId: "turn-1",
-		itemId: "item-1",
+		itemId: null,
 		source: "contextCompaction",
 	});
 });
 
 test("CodexAppServerClient normalizes thread token usage updates to current context usage", () => {
 	const client = new CodexAppServerClient();
-	const events: Array<any> = [];
+	const events: unknown[] = [];
 	client.on("event", (event) => events.push(event));
 
-	(client as any).handleNotification("thread/tokenUsage/updated", {
+	callMethod(client, "handleNotification", ["thread/tokenUsage/updated", {
 		threadId: "thread-1",
 		turnId: "turn-2",
 		usage: { tokensUsed: 204000, tokenLimit: 258000 },
-	});
+	}]);
 
 	assert.deepEqual(events[0], {
 		type: "thread-token-usage",
@@ -111,7 +141,7 @@ test("CodexAppServerClient keeps sandbox full access when allowWrite is false", 
 
 	assert.equal(calls[0]?.method, "thread/start");
 	assert.equal(calls[0]?.params.sandbox, "danger-full-access");
-	assert.equal((client as any).threadWriteAccess.get("thread-1"), false);
+	assert.equal(readThreadWriteAccess(client, "thread-1"), false);
 
 	calls.length = 0;
 	await client.resumeThread({
@@ -122,15 +152,15 @@ test("CodexAppServerClient keeps sandbox full access when allowWrite is false", 
 
 	assert.equal(calls[0]?.method, "thread/resume");
 	assert.equal(calls[0]?.params.sandbox, "danger-full-access");
-	assert.equal((client as any).threadWriteAccess.get("thread-1"), false);
+	assert.equal(readThreadWriteAccess(client, "thread-1"), false);
 });
 
 test("CodexAppServerClient keeps turn sandbox and approval gates separate", async () => {
 	const { client, calls } = createMockClient();
-	const sent: Array<any> = [];
-	(client as any).send = (message: any) => {
+	const sent: unknown[] = [];
+	setMethod(client, "send", (message) => {
 		sent.push(message);
-	};
+	});
 
 	await client.startThread({
 		model: "gpt-5.4",
@@ -152,16 +182,12 @@ test("CodexAppServerClient keeps turn sandbox and approval gates separate", asyn
 	assert.deepEqual(calls[0]?.params.sandboxPolicy, { type: "dangerFullAccess" });
 
 	sent.length = 0;
-	await (client as any).handleServerRequest({
-		id: 1,
-		method: "item/commandExecution/requestApproval",
-		params: { threadId: "thread-1" },
-	});
-	await (client as any).handleServerRequest({
-		id: 2,
-		method: "item/fileChange/requestApproval",
-		params: { threadId: "thread-1" },
-	});
+	await Promise.resolve(callMethod(client, "handleServerRequest", [1, "item/commandExecution/requestApproval", {
+		threadId: "thread-1",
+	}]));
+	await Promise.resolve(callMethod(client, "handleServerRequest", [2, "item/fileChange/requestApproval", {
+		threadId: "thread-1",
+	}]));
 
 	assert.deepEqual(sent[0], { id: 1, result: { decision: "decline" } });
 	assert.deepEqual(sent[1], { id: 2, result: { decision: "decline" } });

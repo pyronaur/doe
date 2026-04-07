@@ -1,9 +1,13 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPlannotatorRequest, parsePlannotatorReviewResult, runPlanReviewCli } from "../src/plan/review.ts";
+import { test } from "./test-runner.ts";
+import {
+	buildPlannotatorRequest,
+	parsePlannotatorReviewResult,
+	runPlanReviewCli,
+} from "../src/plan/review.ts";
 
 function makeFakePlannotator(output: string) {
 	const dir = mkdtempSync(join(tmpdir(), "doe-plannotator-"));
@@ -124,7 +128,8 @@ test("runPlanReviewCli sends the plan text to plannotator stdin and approves all
 	} finally {
 		if (originalPath === undefined) {
 			delete process.env.PATH;
-		} else {
+		}
+		if (originalPath !== undefined) {
 			process.env.PATH = originalPath;
 		}
 	}
@@ -170,7 +175,8 @@ test("runPlanReviewCli returns revision feedback for deny decisions", async () =
 	} finally {
 		if (originalPath === undefined) {
 			delete process.env.PATH;
-		} else {
+		}
+		if (originalPath !== undefined) {
 			process.env.PATH = originalPath;
 		}
 	}
