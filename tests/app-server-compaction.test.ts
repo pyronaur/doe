@@ -2,6 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { CodexAppServerClient } from "../src/codex/app-server-client.ts";
 
+function createMockClient() {
+	const client = new CodexAppServerClient();
+	const calls: Array<{ method: string; params: any }> = [];
+	(client as any).ensureStarted = async () => {};
+	(client as any).request = async (method: string, params: any) => {
+		calls.push({ method, params });
+		if (method === "thread/start" || method === "thread/resume") {
+			return { thread: { id: "thread-1" } };
+		}
+		if (method === "turn/start") {
+			return { turn: { id: "turn-1" } };
+		}
+		return {};
+	};
+	return { client, calls };
+}
+
 test("CodexAppServerClient emits compaction lifecycle events", () => {
 	const client = new CodexAppServerClient();
 	const events: Array<any> = [];
@@ -57,13 +74,7 @@ test("CodexAppServerClient normalizes thread token usage updates to current cont
 });
 
 test("CodexAppServerClient starts worker threads with full access by default", async () => {
-	const client = new CodexAppServerClient();
-	(client as any).ensureStarted = async () => {};
-	const calls: Array<{ method: string; params: any }> = [];
-	(client as any).request = async (method: string, params: any) => {
-		calls.push({ method, params });
-		return { thread: { id: "thread-1" } };
-	};
+	const { client, calls } = createMockClient();
 
 	await client.startThread({
 		model: "gpt-5.4",
@@ -76,13 +87,7 @@ test("CodexAppServerClient starts worker threads with full access by default", a
 });
 
 test("CodexAppServerClient resumes worker threads with full access by default", async () => {
-	const client = new CodexAppServerClient();
-	(client as any).ensureStarted = async () => {};
-	const calls: Array<{ method: string; params: any }> = [];
-	(client as any).request = async (method: string, params: any) => {
-		calls.push({ method, params });
-		return { thread: { id: "thread-1" } };
-	};
+	const { client, calls } = createMockClient();
 
 	await client.resumeThread({
 		threadId: "thread-1",
@@ -91,4 +96,72 @@ test("CodexAppServerClient resumes worker threads with full access by default", 
 
 	assert.equal(calls[0]?.method, "thread/resume");
 	assert.equal(calls[0]?.params.sandbox, "danger-full-access");
+});
+
+test("CodexAppServerClient keeps sandbox full access when allowWrite is false", async () => {
+	const { client, calls } = createMockClient();
+
+	await client.startThread({
+		model: "gpt-5.4",
+		cwd: "/tmp",
+		approvalPolicy: "never",
+		allowWrite: false,
+	});
+
+	assert.equal(calls[0]?.method, "thread/start");
+	assert.equal(calls[0]?.params.sandbox, "danger-full-access");
+	assert.equal((client as any).threadWriteAccess.get("thread-1"), false);
+
+	calls.length = 0;
+	await client.resumeThread({
+		threadId: "thread-1",
+		cwd: "/tmp",
+		allowWrite: false,
+	});
+
+	assert.equal(calls[0]?.method, "thread/resume");
+	assert.equal(calls[0]?.params.sandbox, "danger-full-access");
+	assert.equal((client as any).threadWriteAccess.get("thread-1"), false);
+});
+
+test("CodexAppServerClient keeps turn sandbox and approval gates separate", async () => {
+	const { client, calls } = createMockClient();
+	const sent: Array<any> = [];
+	(client as any).send = (message: any) => {
+		sent.push(message);
+	};
+
+	await client.startThread({
+		model: "gpt-5.4",
+		cwd: "/tmp",
+		approvalPolicy: "never",
+		allowWrite: false,
+	});
+	calls.length = 0;
+
+	await client.startTurn({
+		threadId: "thread-1",
+		prompt: "hello",
+		cwd: "/tmp",
+		model: "gpt-5.4",
+		allowWrite: false,
+	});
+
+	assert.equal(calls[0]?.method, "turn/start");
+	assert.deepEqual(calls[0]?.params.sandboxPolicy, { type: "dangerFullAccess" });
+
+	sent.length = 0;
+	await (client as any).handleServerRequest({
+		id: 1,
+		method: "item/commandExecution/requestApproval",
+		params: { threadId: "thread-1" },
+	});
+	await (client as any).handleServerRequest({
+		id: 2,
+		method: "item/fileChange/requestApproval",
+		params: { threadId: "thread-1" },
+	});
+
+	assert.deepEqual(sent[0], { id: 1, result: { decision: "decline" } });
+	assert.deepEqual(sent[1], { id: 2, result: { decision: "decline" } });
 });

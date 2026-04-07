@@ -3,7 +3,6 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import {
 	buildDangerFullAccessSandbox,
-	buildReadOnlySandbox,
 	type AgentActivity,
 	type CodexClientEvent,
 	type ThreadStartOptions,
@@ -161,7 +160,7 @@ export class CodexAppServerClient extends EventEmitter {
 			model: options.model,
 			cwd: options.cwd,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandbox: allowWrite ? "danger-full-access" : "read-only",
+			sandbox: "danger-full-access",
 			serviceName: options.serviceName ?? this.options.serviceName ?? "pi_doe",
 			baseInstructions: options.baseInstructions ?? null,
 			developerInstructions: options.developerInstructions ?? null,
@@ -183,7 +182,7 @@ export class CodexAppServerClient extends EventEmitter {
 			model: options.model ?? null,
 			cwd: options.cwd ?? null,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandbox: allowWrite ? "danger-full-access" : "read-only",
+			sandbox: "danger-full-access",
 			persistExtendedHistory: true,
 		});
 		this.threadWriteAccess.set(options.threadId, allowWrite);
@@ -225,9 +224,7 @@ export class CodexAppServerClient extends EventEmitter {
 			input: [{ type: "text", text: options.prompt }],
 			cwd: options.cwd,
 			approvalPolicy: options.approvalPolicy ?? "never",
-			sandboxPolicy: allowWrite
-				? buildDangerFullAccessSandbox()
-				: buildReadOnlySandbox(options.networkAccess ?? false),
+			sandboxPolicy: buildDangerFullAccessSandbox(),
 			model: options.model,
 			effort: options.effort ?? "medium",
 		});
